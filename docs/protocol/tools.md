@@ -57,6 +57,98 @@ Default response data shape:
 }
 ```
 
+## `level.create`
+
+Creates a blank editor level. Request arguments:
+
+```json
+{
+  "path": "/Game/MCP/Generated/L_Test",
+  "open": true,
+  "save": true
+}
+```
+
+## `level.open`
+
+Opens an existing level asset.
+
+```json
+{
+  "path": "/Game/FirstPerson/Lvl_FirstPerson"
+}
+```
+
+## `level.save`
+
+Saves the current level, or a specified level path when `path` is present.
+
+```json
+{
+  "path": "/Game/MCP/Generated/L_Test"
+}
+```
+
+## `level.list`
+
+Lists project level assets with compact `{ path, name }` entries.
+
+## `world.bulk_spawn`
+
+Spawns static mesh actors in one bridge request. Each actor is tagged with
+`mcp.generated`, plus optional `mcp.scene:<scene>` and `mcp.group:<group>`.
+
+```json
+{
+  "actors": [
+    {
+      "name": "MCP_Test_Cube",
+      "mesh": "/Engine/BasicShapes/Cube.Cube",
+      "location": [0.0, 0.0, 50.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "scale": [1.0, 1.0, 1.0],
+      "scene": "test_scene",
+      "group": "test_group"
+    }
+  ]
+}
+```
+
+## `world.bulk_delete`
+
+Deletes actors by label/name or tag. Empty selectors are rejected.
+
+```json
+{
+  "names": ["MCP_Test_Cube"],
+  "tags": []
+}
+```
+
+## `world.query`
+
+Returns matching actor names, paths, classes, transforms, and tags. Use
+`include_generated: true` to query `mcp.generated` actors without passing tags.
+
+```json
+{
+  "tags": ["mcp.generated"],
+  "include_generated": true,
+  "limit": 100
+}
+```
+
+## `world.snapshot`
+
+Writes a world actor snapshot JSON file and returns its path plus actor count.
+
+```json
+{
+  "path": "Saved/UnrealMCP/snapshots/world_snapshot.json",
+  "tags": ["mcp.generated"]
+}
+```
+
 ## MCP Methods
 
 The stdio server currently handles:
