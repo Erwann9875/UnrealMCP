@@ -4,6 +4,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Async/Async.h"
 #include "Common/TcpListener.h"
+#include "CollisionQueryParams.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/ExponentialHeightFogComponent.h"
 #include "Components/LightComponent.h"
@@ -39,6 +40,13 @@
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "Landscape.h"
+#include "LandscapeComponent.h"
+#include "LandscapeDataAccess.h"
+#include "LandscapeEdit.h"
+#include "LandscapeInfo.h"
+#include "LandscapeLayerInfoObject.h"
+#include "LandscapeUtils.h"
 #include "MaterialEditingLibrary.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
@@ -431,6 +439,56 @@ TSharedRef<FJsonObject> MakeRuntimeAnimationOperation(
     }
     ResultData->SetArrayField(TEXT("attached"), AttachedValues);
     ResultData->SetNumberField(TEXT("count"), AttachedValues.Num());
+    return ResultData;
+}
+
+TSharedRef<FJsonObject> MakeLandscapeOperation(
+    const FString& Name,
+    const FString& Path,
+    const FIntPoint& ComponentCount,
+    const FIntPoint& VertexCount,
+    const TArray<FString>& Changed)
+{
+    TArray<TSharedPtr<FJsonValue>> ChangedValues;
+    for (const FString& Item : Changed)
+    {
+        ChangedValues.Add(MakeStringValue(Item));
+    }
+
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    TArray<TSharedPtr<FJsonValue>> ComponentCountValues;
+    ComponentCountValues.Add(MakeNumberValue(ComponentCount.X));
+    ComponentCountValues.Add(MakeNumberValue(ComponentCount.Y));
+    TArray<TSharedPtr<FJsonValue>> VertexCountValues;
+    VertexCountValues.Add(MakeNumberValue(VertexCount.X));
+    VertexCountValues.Add(MakeNumberValue(VertexCount.Y));
+    ResultData->SetStringField(TEXT("name"), Name);
+    ResultData->SetStringField(TEXT("path"), Path);
+    ResultData->SetArrayField(TEXT("component_count"), ComponentCountValues);
+    ResultData->SetArrayField(TEXT("vertex_count"), VertexCountValues);
+    ResultData->SetArrayField(TEXT("changed"), ChangedValues);
+    return ResultData;
+}
+
+void AddSnappedActor(
+    TArray<TSharedPtr<FJsonValue>>& Actors,
+    const AActor& Actor,
+    const FVector& OldLocation,
+    const FVector& NewLocation)
+{
+    TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+    Item->SetStringField(TEXT("name"), Actor.GetActorLabel());
+    Item->SetStringField(TEXT("path"), Actor.GetPathName());
+    Item->SetArrayField(TEXT("old_location"), MakeVectorArray(OldLocation.X, OldLocation.Y, OldLocation.Z));
+    Item->SetArrayField(TEXT("new_location"), MakeVectorArray(NewLocation.X, NewLocation.Y, NewLocation.Z));
+    Actors.Add(MakeObjectValue(Item));
+}
+
+TSharedRef<FJsonObject> MakePlacementSnapResult(const TArray<TSharedPtr<FJsonValue>>& Actors)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("actors"), Actors);
+    ResultData->SetNumberField(TEXT("count"), Actors.Num());
     return ResultData;
 }
 
@@ -1080,6 +1138,376 @@ TSharedRef<FJsonObject> QueryWorldActors(
     Query->SetNumberField(TEXT("total_count"), TotalCount);
     return Query;
 }
+
+TSharedPtr<FJsonObject> GetNestedObjectOrSelf(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName)
+{
+    const TSharedPtr<FJsonObject>* Nested = nullptr;
+    if (Object.IsValid() && Object->TryGetObjectField(FieldName, Nested) && Nested != nullptr && Nested->IsValid())
+    {
+        return *Nested;
+    }
+
+    return Object;
+}
+
+bool ReadIntPointField(
+    const TSharedPtr<FJsonObject>& Object,
+    const FString& FieldName,
+    const FIntPoint& DefaultValue,
+    FIntPoint& OutValue)
+{
+    OutValue = DefaultValue;
+    if (!Object.IsValid())
+    {
+        return false;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+    if (!Object->TryGetArrayField(FieldName, Values))
+    {
+        return true;
+    }
+
+    if (Values->Num() != 2)
+    {
+        return false;
+    }
+
+    OutValue = FIntPoint(
+        static_cast<int32>((*Values)[0]->AsNumber()),
+        static_cast<int32>((*Values)[1]->AsNumber()));
+    return true;
+}
+
+void AddGeneratedLandscapeTags(AActor& Actor, const TArray<FString>& ExtraTags = TArray<FString>())
+{
+    Actor.Tags.AddUnique(TEXT("mcp.generated"));
+    Actor.Tags.AddUnique(TEXT("mcp.landscape"));
+    for (const FString& Tag : ExtraTags)
+    {
+        if (!Tag.IsEmpty())
+        {
+            Actor.Tags.AddUnique(FName(*Tag));
+        }
+    }
+}
+
+ALandscape* FindLandscapeByLabel(UWorld& World, const FString& Label)
+{
+    for (TActorIterator<ALandscape> It(&World); It; ++It)
+    {
+        ALandscape* Landscape = *It;
+        if (IsValid(Landscape) && (Landscape->GetActorLabel() == Label || Landscape->GetName() == Label))
+        {
+            return Landscape;
+        }
+    }
+
+    return nullptr;
+}
+
+bool GetLandscapeExtent(ALandscape& Landscape, FIntRect& OutExtent)
+{
+    ULandscapeInfo* LandscapeInfo = Landscape.GetLandscapeInfo();
+    if (!LandscapeInfo)
+    {
+        LandscapeInfo = Landscape.CreateLandscapeInfo();
+    }
+
+    return LandscapeInfo && LandscapeInfo->GetLandscapeExtent(&Landscape, OutExtent);
+}
+
+FIntPoint GetLandscapeVertexCount(ALandscape& Landscape)
+{
+    FIntRect Extent;
+    if (!GetLandscapeExtent(Landscape, Extent))
+    {
+        return FIntPoint::ZeroValue;
+    }
+
+    return FIntPoint(Extent.Max.X - Extent.Min.X + 1, Extent.Max.Y - Extent.Min.Y + 1);
+}
+
+FIntPoint GetLandscapeComponentCount(ALandscape& Landscape)
+{
+    FIntRect Extent;
+    if (!GetLandscapeExtent(Landscape, Extent) || Landscape.ComponentSizeQuads <= 0)
+    {
+        return FIntPoint::ZeroValue;
+    }
+
+    return FIntPoint(
+        (Extent.Max.X - Extent.Min.X) / Landscape.ComponentSizeQuads,
+        (Extent.Max.Y - Extent.Min.Y) / Landscape.ComponentSizeQuads);
+}
+
+uint16 WorldHeightToLandscapeHeight(const ALandscape& Landscape, double WorldHeight)
+{
+    const double ScaleZ = FMath::Max(FMath::Abs(Landscape.GetActorScale3D().Z), UE_SMALL_NUMBER);
+    return LandscapeDataAccess::GetTexHeight(static_cast<float>(WorldHeight / ScaleZ));
+}
+
+bool ValidateLandscapeShape(
+    const FIntPoint& ComponentCount,
+    int32 SectionSize,
+    int32 SectionsPerComponent,
+    FString& OutError)
+{
+    if (ComponentCount.X <= 0 || ComponentCount.Y <= 0)
+    {
+        OutError = TEXT("landscape component_count values must be positive");
+        return false;
+    }
+
+    if (SectionsPerComponent != 1 && SectionsPerComponent != 2)
+    {
+        OutError = TEXT("landscape sections_per_component must be 1 or 2");
+        return false;
+    }
+
+    if (SectionSize < 1 || SectionSize > 255 || !FMath::IsPowerOfTwo(SectionSize + 1))
+    {
+        OutError = TEXT("landscape section_size + 1 must be a power of two between 2 and 256");
+        return false;
+    }
+
+    const int64 VertexCountX = static_cast<int64>(ComponentCount.X) * SectionSize * SectionsPerComponent + 1;
+    const int64 VertexCountY = static_cast<int64>(ComponentCount.Y) * SectionSize * SectionsPerComponent + 1;
+    if (VertexCountX * VertexCountY > 1024 * 1024)
+    {
+        OutError = TEXT("landscape vertex count exceeds the v1 limit of 1,048,576 vertices");
+        return false;
+    }
+
+    return true;
+}
+
+TArray<uint16> MakeFlatLandscapeHeightData(const FIntPoint& VertexCount)
+{
+    TArray<uint16> HeightData;
+    HeightData.Init(LandscapeDataAccess::GetTexHeight(0.0f), VertexCount.X * VertexCount.Y);
+    return HeightData;
+}
+
+double SmoothStep(double Edge0, double Edge1, double Value)
+{
+    if (Edge1 <= Edge0)
+    {
+        return Value >= Edge1 ? 1.0 : 0.0;
+    }
+
+    const double T = FMath::Clamp((Value - Edge0) / (Edge1 - Edge0), 0.0, 1.0);
+    return T * T * (3.0 - 2.0 * T);
+}
+
+bool BuildHeightDataFromPatch(
+    const TSharedPtr<FJsonObject>& PatchData,
+    ALandscape& Landscape,
+    TArray<uint16>& OutHeightData,
+    FIntRect& OutExtent,
+    FString& OutError)
+{
+    if (!GetLandscapeExtent(Landscape, OutExtent))
+    {
+        OutError = TEXT("failed to read landscape extent");
+        return false;
+    }
+
+    const int32 Width = OutExtent.Max.X - OutExtent.Min.X + 1;
+    const int32 Height = OutExtent.Max.Y - OutExtent.Min.Y + 1;
+
+    double RequestedWidth = 0.0;
+    double RequestedHeight = 0.0;
+    PatchData->TryGetNumberField(TEXT("width"), RequestedWidth);
+    PatchData->TryGetNumberField(TEXT("height"), RequestedHeight);
+    if ((RequestedWidth > 0.0 && static_cast<int32>(RequestedWidth) != Width) ||
+        (RequestedHeight > 0.0 && static_cast<int32>(RequestedHeight) != Height))
+    {
+        OutError = FString::Printf(TEXT("heightfield size must match landscape extent %dx%d"), Width, Height);
+        return false;
+    }
+
+    double BaseHeight = 0.0;
+    double Amplitude = 0.0;
+    double Frequency = 1.0;
+    double Seed = 0.0;
+    double CityPadRadius = 0.0;
+    double CityPadFalloff = 1000.0;
+    PatchData->TryGetNumberField(TEXT("base_height"), BaseHeight);
+    PatchData->TryGetNumberField(TEXT("amplitude"), Amplitude);
+    PatchData->TryGetNumberField(TEXT("frequency"), Frequency);
+    PatchData->TryGetNumberField(TEXT("seed"), Seed);
+    PatchData->TryGetNumberField(TEXT("city_pad_radius"), CityPadRadius);
+    PatchData->TryGetNumberField(TEXT("city_pad_falloff"), CityPadFalloff);
+
+    const TArray<TSharedPtr<FJsonValue>>* Samples = nullptr;
+    const bool bHasSamples = PatchData->TryGetArrayField(TEXT("samples"), Samples) && Samples != nullptr && Samples->Num() > 0;
+    if (bHasSamples && Samples->Num() != Width * Height)
+    {
+        OutError = FString::Printf(TEXT("samples must contain exactly %d values"), Width * Height);
+        return false;
+    }
+
+    OutHeightData.Reset(Width * Height);
+    OutHeightData.AddUninitialized(Width * Height);
+
+    const FVector Scale = Landscape.GetActorScale3D();
+    const double HalfWidth = FMath::Max(1.0, static_cast<double>(Width - 1)) * FMath::Abs(Scale.X) * 0.5;
+    const double HalfHeight = FMath::Max(1.0, static_cast<double>(Height - 1)) * FMath::Abs(Scale.Y) * 0.5;
+    const double SeedOffset = Seed * 0.001;
+
+    for (int32 Y = 0; Y < Height; ++Y)
+    {
+        for (int32 X = 0; X < Width; ++X)
+        {
+            const int32 Index = Y * Width + X;
+            double Sample = 0.0;
+            if (bHasSamples)
+            {
+                Sample = (*Samples)[Index]->AsNumber();
+            }
+            else if (Amplitude != 0.0)
+            {
+                const double NX = Width > 1 ? (static_cast<double>(X) / (Width - 1)) * 2.0 - 1.0 : 0.0;
+                const double NY = Height > 1 ? (static_cast<double>(Y) / (Height - 1)) * 2.0 - 1.0 : 0.0;
+                const double Waves = 0.55 * FMath::Sin((NX * 5.21 + SeedOffset) * Frequency) +
+                    0.45 * FMath::Cos((NY * 7.17 - SeedOffset) * Frequency);
+                const double Ridge = FMath::Pow(FMath::Abs(FMath::Sin((NX + NY + SeedOffset) * Frequency * 2.1)), 1.8);
+                Sample = FMath::Clamp(Waves * 0.6 + Ridge * 0.4, -1.0, 1.0);
+            }
+
+            double PadAlpha = 1.0;
+            if (CityPadRadius > 0.0)
+            {
+                const double WorldX = (Width > 1 ? (static_cast<double>(X) / (Width - 1)) * 2.0 - 1.0 : 0.0) * HalfWidth;
+                const double WorldY = (Height > 1 ? (static_cast<double>(Y) / (Height - 1)) * 2.0 - 1.0 : 0.0) * HalfHeight;
+                const double Distance = FMath::Sqrt(WorldX * WorldX + WorldY * WorldY);
+                PadAlpha = SmoothStep(CityPadRadius, CityPadRadius + FMath::Max(CityPadFalloff, 1.0), Distance);
+            }
+
+            const double WorldHeight = BaseHeight + Sample * Amplitude * PadAlpha;
+            OutHeightData[Index] = WorldHeightToLandscapeHeight(Landscape, WorldHeight);
+        }
+    }
+
+    return true;
+}
+
+UMaterialInterface* LoadMaterialInterfaceFromPath(const FString& MaterialPath)
+{
+    if (MaterialPath.IsEmpty())
+    {
+        return nullptr;
+    }
+
+    return LoadObject<UMaterialInterface>(nullptr, *ToObjectPath(MaterialPath));
+}
+
+void AssignLandscapeMaterial(ALandscape& Landscape, UMaterialInterface& Material)
+{
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+    Landscape.LandscapeMaterial = &Material;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+    Landscape.UpdateAllComponentMaterialInstances();
+}
+
+ULandscapeLayerInfoObject* FindOrCreateLandscapeLayerInfo(ALandscape& Landscape, const FString& LayerName)
+{
+    if (LayerName.IsEmpty())
+    {
+        return nullptr;
+    }
+
+    ULandscapeInfo* LandscapeInfo = Landscape.GetLandscapeInfo();
+    if (!LandscapeInfo)
+    {
+        LandscapeInfo = Landscape.CreateLandscapeInfo();
+    }
+
+    if (LandscapeInfo)
+    {
+        if (ULandscapeLayerInfoObject* Existing = LandscapeInfo->GetLayerInfoByName(FName(*LayerName), &Landscape))
+        {
+            return Existing;
+        }
+    }
+
+    ULandscapeLayerInfoObject* LayerInfo =
+        UE::Landscape::CreateTargetLayerInfo(FName(*LayerName), UE::Landscape::GetSharedAssetsPath(Landscape.GetLevel()));
+    if (LayerInfo)
+    {
+        LayerInfo->SetLayerName(FName(*LayerName), true);
+    }
+
+    return LayerInfo;
+}
+
+void RegisterLandscapeLayer(ALandscape& Landscape, ULandscapeLayerInfoObject& LayerInfo)
+{
+    const FName LayerName = LayerInfo.GetLayerName();
+    FLandscapeTargetLayerSettings Settings(&LayerInfo);
+    if (Landscape.HasTargetLayer(&LayerInfo))
+    {
+        Landscape.UpdateTargetLayer(LayerName, Settings, true);
+    }
+    else
+    {
+        Landscape.AddTargetLayer(LayerName, Settings, true);
+    }
+}
+
+bool PaintLandscapeLayers(
+    ALandscape& Landscape,
+    const TArray<FString>& LayerNames,
+    TArray<FString>& Changed,
+    FString& OutError)
+{
+    if (LayerNames.IsEmpty())
+    {
+        return true;
+    }
+
+    ULandscapeInfo* LandscapeInfo = Landscape.GetLandscapeInfo();
+    if (!LandscapeInfo)
+    {
+        LandscapeInfo = Landscape.CreateLandscapeInfo();
+    }
+
+    FIntRect Extent;
+    if (!LandscapeInfo || !LandscapeInfo->GetLandscapeExtent(&Landscape, Extent))
+    {
+        OutError = TEXT("failed to read landscape extent for layer painting");
+        return false;
+    }
+
+    const int32 Width = Extent.Max.X - Extent.Min.X + 1;
+    const int32 Height = Extent.Max.Y - Extent.Min.Y + 1;
+    TArray<uint8> Weights;
+    Weights.SetNumUninitialized(Width * Height);
+
+    Landscape.Modify();
+    FLandscapeEditDataInterface Edit(LandscapeInfo);
+    for (int32 LayerIndex = 0; LayerIndex < LayerNames.Num(); ++LayerIndex)
+    {
+        ULandscapeLayerInfoObject* LayerInfo = FindOrCreateLandscapeLayerInfo(Landscape, LayerNames[LayerIndex]);
+        if (!LayerInfo)
+        {
+            OutError = FString::Printf(TEXT("failed to create landscape layer '%s'"), *LayerNames[LayerIndex]);
+            return false;
+        }
+
+        RegisterLandscapeLayer(Landscape, *LayerInfo);
+        const uint8 FillValue = LayerIndex == 0 ? 255 : 0;
+        for (uint8& Weight : Weights)
+        {
+            Weight = FillValue;
+        }
+        Edit.SetAlphaData(LayerInfo, Extent.Min.X, Extent.Min.Y, Extent.Max.X, Extent.Max.Y, Weights.GetData(), 0);
+        Changed.AddUnique(LayerNames[LayerIndex]);
+    }
+
+    return true;
+}
 }
 
 FBridgeServer::FBridgeServer()
@@ -1448,6 +1876,10 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         CommandNames.Add(MakeStringValue(TEXT("lighting.set_post_process")));
         CommandNames.Add(MakeStringValue(TEXT("lighting.bulk_set_lights")));
         CommandNames.Add(MakeStringValue(TEXT("lighting.set_time_of_day")));
+        CommandNames.Add(MakeStringValue(TEXT("landscape.create")));
+        CommandNames.Add(MakeStringValue(TEXT("landscape.set_heightfield")));
+        CommandNames.Add(MakeStringValue(TEXT("landscape.paint_layers")));
+        CommandNames.Add(MakeStringValue(TEXT("placement.bulk_snap_to_ground")));
         CommandNames.Add(MakeStringValue(TEXT("blueprint.create_actor")));
         CommandNames.Add(MakeStringValue(TEXT("blueprint.add_static_mesh_component")));
         CommandNames.Add(MakeStringValue(TEXT("blueprint.add_light_component")));
@@ -2375,6 +2807,328 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         ConfigureDirectionalLight(*World, TEXT("MCP_SunLight"), SunRotation, SunIntensity, SunColor, Changed);
         World->MarkPackageDirty();
         return MakeTaggedResult(TEXT("lighting_operation"), MakeLightingOperationResult(Changed));
+    }
+
+    if (CommandType == TEXT("landscape_create"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        FString Name;
+        if (!SpecData->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("landscape.create requires data.name"));
+            return nullptr;
+        }
+
+        FIntPoint ComponentCount(4, 4);
+        if (!ReadIntPointField(SpecData, TEXT("component_count"), ComponentCount, ComponentCount))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("component_count must contain two integers"));
+            return nullptr;
+        }
+
+        double SectionSizeNumber = 63.0;
+        double SectionsPerComponentNumber = 1.0;
+        SpecData->TryGetNumberField(TEXT("section_size"), SectionSizeNumber);
+        SpecData->TryGetNumberField(TEXT("sections_per_component"), SectionsPerComponentNumber);
+        const int32 SectionSize = static_cast<int32>(SectionSizeNumber);
+        const int32 SectionsPerComponent = static_cast<int32>(SectionsPerComponentNumber);
+
+        FString ShapeError;
+        if (!ValidateLandscapeShape(ComponentCount, SectionSize, SectionsPerComponent, ShapeError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), ShapeError);
+            return nullptr;
+        }
+
+        FVector Location = FVector::ZeroVector;
+        FVector Scale = FVector(100.0, 100.0, 100.0);
+        if (!ReadVectorField(SpecData, TEXT("location"), Location, Location) ||
+            !ReadVectorField(SpecData, TEXT("scale"), Scale, Scale))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("landscape transform vectors must be fixed-size numeric arrays"));
+            return nullptr;
+        }
+
+        UMaterialInterface* Material = nullptr;
+        FString MaterialPath;
+        if (SpecData->TryGetStringField(TEXT("material"), MaterialPath) && !MaterialPath.IsEmpty())
+        {
+            Material = LoadMaterialInterfaceFromPath(MaterialPath);
+            if (!Material)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to load landscape material '%s'"), *MaterialPath));
+                return nullptr;
+            }
+        }
+
+        const TArray<FString> Tags = ReadStringArrayField(SpecData, TEXT("tags"));
+        TArray<FString> Changed;
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "CreateLandscape", "MCP Create Landscape"));
+
+        ALandscape* Landscape = FindLandscapeByLabel(*World, Name);
+        if (Landscape)
+        {
+            Landscape->Modify();
+            Landscape->SetActorLocation(Location);
+            Landscape->SetActorScale3D(Scale);
+            AddGeneratedLandscapeTags(*Landscape, Tags);
+            Changed.Add(TEXT("updated"));
+            if (Material)
+            {
+                AssignLandscapeMaterial(*Landscape, *Material);
+                Changed.Add(TEXT("material"));
+            }
+            Landscape->MarkPackageDirty();
+            World->MarkPackageDirty();
+            return MakeTaggedResult(
+                TEXT("landscape_operation"),
+                MakeLandscapeOperation(Name, Landscape->GetPathName(), GetLandscapeComponentCount(*Landscape), GetLandscapeVertexCount(*Landscape), Changed));
+        }
+
+        const FIntPoint VertexCount(
+            ComponentCount.X * SectionSize * SectionsPerComponent + 1,
+            ComponentCount.Y * SectionSize * SectionsPerComponent + 1);
+        TArray<uint16> HeightData = MakeFlatLandscapeHeightData(VertexCount);
+
+        FActorSpawnParameters SpawnParameters;
+        SpawnParameters.Name = MakeUniqueObjectName(World, ALandscape::StaticClass(), FName(*Name));
+        Landscape = World->SpawnActor<ALandscape>(Location, FRotator::ZeroRotator, SpawnParameters);
+        if (!Landscape)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to spawn landscape actor"));
+            return nullptr;
+        }
+
+        Landscape->SetActorLabel(Name);
+        Landscape->SetActorScale3D(Scale);
+        AddGeneratedLandscapeTags(*Landscape, Tags);
+        if (Material)
+        {
+            AssignLandscapeMaterial(*Landscape, *Material);
+        }
+
+        TMap<FGuid, TArray<uint16>> HeightDataPerLayers;
+        HeightDataPerLayers.Add(FGuid(), MoveTemp(HeightData));
+        TMap<FGuid, TArray<FLandscapeImportLayerInfo>> ImportMaterialLayerInfosPerLayers;
+        ImportMaterialLayerInfosPerLayers.Add(FGuid(), TArray<FLandscapeImportLayerInfo>());
+
+        Landscape->Import(
+            FGuid::NewGuid(),
+            0,
+            0,
+            VertexCount.X - 1,
+            VertexCount.Y - 1,
+            SectionsPerComponent,
+            SectionSize,
+            HeightDataPerLayers,
+            TEXT(""),
+            ImportMaterialLayerInfosPerLayers,
+            ELandscapeImportAlphamapType::Additive,
+            TArrayView<const FLandscapeLayer>());
+        Landscape->CreateLandscapeInfo();
+        Landscape->RegisterAllComponents();
+        Landscape->PostEditChange();
+        Landscape->MarkPackageDirty();
+        World->MarkPackageDirty();
+
+        Changed.Add(TEXT("created"));
+        return MakeTaggedResult(
+            TEXT("landscape_operation"),
+            MakeLandscapeOperation(Name, Landscape->GetPathName(), ComponentCount, VertexCount, Changed));
+    }
+
+    if (CommandType == TEXT("landscape_set_heightfield"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        TSharedPtr<FJsonObject> PatchData = GetNestedObjectOrSelf(Data, TEXT("patch"));
+        FString Name;
+        if (!PatchData->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("landscape.set_heightfield requires data.name"));
+            return nullptr;
+        }
+
+        ALandscape* Landscape = FindLandscapeByLabel(*World, Name);
+        if (!Landscape)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to find landscape '%s'"), *Name));
+            return nullptr;
+        }
+
+        TArray<uint16> HeightData;
+        FIntRect Extent;
+        FString HeightError;
+        if (!BuildHeightDataFromPatch(PatchData, *Landscape, HeightData, Extent, HeightError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), HeightError);
+            return nullptr;
+        }
+
+        ULandscapeInfo* LandscapeInfo = Landscape->GetLandscapeInfo();
+        if (!LandscapeInfo)
+        {
+            LandscapeInfo = Landscape->CreateLandscapeInfo();
+        }
+        if (!LandscapeInfo)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to read landscape info"));
+            return nullptr;
+        }
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "SetLandscapeHeightfield", "MCP Set Landscape Heightfield"));
+        Landscape->Modify();
+        Landscape->PreEditChange(nullptr);
+        FLandscapeEditDataInterface Edit(LandscapeInfo);
+        Edit.SetHeightData(Extent.Min.X, Extent.Min.Y, Extent.Max.X, Extent.Max.Y, HeightData.GetData(), 0, true);
+        Landscape->PostEditChange();
+        Landscape->MarkPackageDirty();
+        World->MarkPackageDirty();
+
+        TArray<FString> Changed = {TEXT("heightfield")};
+        return MakeTaggedResult(
+            TEXT("landscape_operation"),
+            MakeLandscapeOperation(Name, Landscape->GetPathName(), GetLandscapeComponentCount(*Landscape), GetLandscapeVertexCount(*Landscape), Changed));
+    }
+
+    if (CommandType == TEXT("landscape_paint_layers"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        TSharedPtr<FJsonObject> PaintData = GetNestedObjectOrSelf(Data, TEXT("paint"));
+        FString Name;
+        if (!PaintData->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("landscape.paint_layers requires data.name"));
+            return nullptr;
+        }
+
+        ALandscape* Landscape = FindLandscapeByLabel(*World, Name);
+        if (!Landscape)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to find landscape '%s'"), *Name));
+            return nullptr;
+        }
+
+        UMaterialInterface* Material = nullptr;
+        FString MaterialPath;
+        if (PaintData->TryGetStringField(TEXT("material"), MaterialPath) && !MaterialPath.IsEmpty())
+        {
+            Material = LoadMaterialInterfaceFromPath(MaterialPath);
+            if (!Material)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to load landscape material '%s'"), *MaterialPath));
+                return nullptr;
+            }
+        }
+
+        TArray<FString> Changed;
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "PaintLandscapeLayers", "MCP Paint Landscape Layers"));
+        Landscape->Modify();
+        if (Material)
+        {
+            AssignLandscapeMaterial(*Landscape, *Material);
+            Changed.Add(TEXT("material"));
+        }
+
+        FString PaintError;
+        const TArray<FString> Layers = ReadStringArrayField(PaintData, TEXT("layers"));
+        if (!PaintLandscapeLayers(*Landscape, Layers, Changed, PaintError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), PaintError);
+            return nullptr;
+        }
+
+        Landscape->UpdateAllComponentMaterialInstances();
+        Landscape->PostEditChange();
+        Landscape->MarkPackageDirty();
+        World->MarkPackageDirty();
+        return MakeTaggedResult(
+            TEXT("landscape_operation"),
+            MakeLandscapeOperation(Name, Landscape->GetPathName(), GetLandscapeComponentCount(*Landscape), GetLandscapeVertexCount(*Landscape), Changed));
+    }
+
+    if (CommandType == TEXT("placement_bulk_snap_to_ground"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        const TArray<FString> Names = ReadStringArrayField(SpecData, TEXT("names"));
+        TArray<FString> Tags = ReadStringArrayField(SpecData, TEXT("tags"));
+        bool bIncludeGenerated = false;
+        SpecData->TryGetBoolField(TEXT("include_generated"), bIncludeGenerated);
+        if (bIncludeGenerated && Tags.IsEmpty())
+        {
+            Tags.Add(TEXT("mcp.generated"));
+        }
+
+        if (Names.IsEmpty() && Tags.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("placement.bulk_snap_to_ground requires names, tags, or include_generated"));
+            return nullptr;
+        }
+
+        double TraceDistance = 50000.0;
+        double OffsetZ = 0.0;
+        SpecData->TryGetNumberField(TEXT("trace_distance"), TraceDistance);
+        SpecData->TryGetNumberField(TEXT("offset_z"), OffsetZ);
+        TraceDistance = FMath::Max(TraceDistance, 1.0);
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "BulkSnapToGround", "MCP Bulk Snap To Ground"));
+        TArray<TSharedPtr<FJsonValue>> SnappedActors;
+        for (TActorIterator<AActor> It(World); It; ++It)
+        {
+            AActor* Actor = *It;
+            if (!IsValid(Actor) || Actor->IsA<ALandscapeProxy>() || !ActorMatches(*Actor, Names, Tags))
+            {
+                continue;
+            }
+
+            const FVector OldLocation = Actor->GetActorLocation();
+            const FVector Start = OldLocation + FVector(0.0, 0.0, TraceDistance);
+            const FVector End = OldLocation - FVector(0.0, 0.0, TraceDistance);
+            FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(UnrealMCPBulkSnapToGround), true);
+            QueryParams.AddIgnoredActor(Actor);
+
+            FHitResult Hit;
+            if (!World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, QueryParams))
+            {
+                continue;
+            }
+
+            const FBox Bounds = Actor->GetComponentsBoundingBox(true);
+            const double PivotToBottom = Bounds.IsValid ? OldLocation.Z - Bounds.Min.Z : 0.0;
+            FVector NewLocation = OldLocation;
+            NewLocation.Z = Hit.Location.Z + PivotToBottom + OffsetZ;
+            Actor->Modify();
+            Actor->SetActorLocation(NewLocation);
+            AddSnappedActor(SnappedActors, *Actor, OldLocation, NewLocation);
+        }
+
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("placement_snap"), MakePlacementSnapResult(SnappedActors));
     }
 
     if (CommandType == TEXT("blueprint_create_actor"))
