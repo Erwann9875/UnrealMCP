@@ -197,6 +197,26 @@ fn tools_list_response(id: Value) -> Value {
                     static_mesh_collision_schema()
                 ),
                 tool_definition(
+                    "road.create_network",
+                    "Create a grid road network in one bridge request.",
+                    road_create_network_schema()
+                ),
+                tool_definition(
+                    "scene.bulk_place_on_grid",
+                    "Place repeated static mesh actors on a deterministic grid.",
+                    scene_bulk_place_on_grid_schema()
+                ),
+                tool_definition(
+                    "scene.create_city_block",
+                    "Create one city block with roads, sidewalks, and buildings.",
+                    scene_create_city_block_schema()
+                ),
+                tool_definition(
+                    "scene.create_district",
+                    "Create a preset multi-block district in one bridge request.",
+                    scene_create_district_schema()
+                ),
+                tool_definition(
                     "material.create",
                     "Create a simple Unreal material asset.",
                     material_create_schema()
@@ -387,6 +407,15 @@ fn vec3_schema() -> Value {
     })
 }
 
+fn vec2_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "number" },
+        "minItems": 2,
+        "maxItems": 2
+    })
+}
+
 fn vec4_schema() -> Value {
     json!({
         "type": "array",
@@ -551,6 +580,97 @@ fn static_mesh_collision_schema() -> Value {
             "rebuild": { "type": "boolean" }
         },
         "required": ["paths"],
+        "additionalProperties": false
+    })
+}
+
+fn road_create_network_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name_prefix": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "origin": vec3_schema(),
+            "rows": { "type": "integer", "minimum": 1 },
+            "columns": { "type": "integer", "minimum": 1 },
+            "block_size": vec2_schema(),
+            "road_width": { "type": "number", "minimum": 1 },
+            "road_thickness": { "type": "number", "minimum": 1 },
+            "road_mesh": { "type": "string" }
+        },
+        "required": ["name_prefix"],
+        "additionalProperties": false
+    })
+}
+
+fn scene_bulk_place_on_grid_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name_prefix": { "type": "string" },
+            "mesh": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "origin": vec3_schema(),
+            "rows": { "type": "integer", "minimum": 1 },
+            "columns": { "type": "integer", "minimum": 1 },
+            "spacing": vec2_schema(),
+            "rotation": vec3_schema(),
+            "scale": vec3_schema(),
+            "yaw_variation": { "type": "number", "minimum": 0 },
+            "scale_variation": { "type": "number", "minimum": 0 },
+            "seed": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["name_prefix", "mesh"],
+        "additionalProperties": false
+    })
+}
+
+fn scene_create_city_block_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name_prefix": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "origin": vec3_schema(),
+            "size": vec2_schema(),
+            "road_width": { "type": "number", "minimum": 1 },
+            "sidewalk_width": { "type": "number", "minimum": 0 },
+            "road_mesh": { "type": "string" },
+            "sidewalk_mesh": { "type": "string" },
+            "building_mesh": { "type": "string" },
+            "building_rows": { "type": "integer", "minimum": 1 },
+            "building_columns": { "type": "integer", "minimum": 1 },
+            "building_scale": vec3_schema(),
+            "seed": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["name_prefix", "building_mesh"],
+        "additionalProperties": false
+    })
+}
+
+fn scene_create_district_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name_prefix": { "type": "string" },
+            "preset": {
+                "type": "string",
+                "enum": ["downtown", "residential", "industrial", "beach", "hills"]
+            },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "origin": vec3_schema(),
+            "blocks": u32_pair_schema(),
+            "block_size": vec2_schema(),
+            "road_width": { "type": "number", "minimum": 1 },
+            "road_mesh": { "type": "string" },
+            "building_mesh": { "type": "string" },
+            "seed": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["name_prefix", "building_mesh"],
         "additionalProperties": false
     })
 }
@@ -1099,6 +1219,10 @@ async fn call_tool(
         "mesh.create_building" => tools.mesh_create_building(arguments).await,
         "mesh.create_sign" => tools.mesh_create_sign(arguments).await,
         "static_mesh.set_collision" => tools.static_mesh_set_collision(arguments).await,
+        "road.create_network" => tools.road_create_network(arguments).await,
+        "scene.bulk_place_on_grid" => tools.scene_bulk_place_on_grid(arguments).await,
+        "scene.create_city_block" => tools.scene_create_city_block(arguments).await,
+        "scene.create_district" => tools.scene_create_district(arguments).await,
         "material.create" => tools.material_create(arguments).await,
         "material.create_instance" => tools.material_create_instance(arguments).await,
         "material.create_procedural_texture" => {

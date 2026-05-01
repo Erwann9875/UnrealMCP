@@ -5,13 +5,14 @@ use serde::Deserialize;
 use unreal_mcp_protocol::{
     ActorSpawnSpec, AssetImportItem, AssetImportResult, AssetImportSpec, AssetOperation,
     AssetValidateSpec, AssetValidationResult, BlueprintComponentOperation, BlueprintOperation,
-    BridgeStatus, Command, CommandResult, ErrorMode, GeneratedBuildingSpec, GeneratedMeshOperation,
-    GeneratedSignSpec, LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint,
-    LandscapeOperation, LevelOperation, LightComponentSpec, LightSpec, LightingOperation,
-    MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
-    MaterialParameterOperation, PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation,
-    RequestEnvelope, ResponseEnvelope, ResponseMode, RuntimeAnimationOperation,
-    RuntimeAnimationSpec, StaticMeshCollisionSpec, StaticMeshComponentSpec,
+    BridgeStatus, CityBlockSpec, Command, CommandResult, DistrictSpec, ErrorMode,
+    GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec, GridPlacementSpec,
+    LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint, LandscapeOperation,
+    LevelOperation, LightComponentSpec, LightSpec, LightingOperation, MaterialApplyResult,
+    MaterialAssignment, MaterialOperation, MaterialParameter, MaterialParameterOperation,
+    PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation, RequestEnvelope,
+    ResponseEnvelope, ResponseMode, RoadNetworkSpec, RuntimeAnimationOperation,
+    RuntimeAnimationSpec, SceneAssemblyResult, StaticMeshCollisionSpec, StaticMeshComponentSpec,
     StaticMeshOperationResult, TextureCreateSpec, Transform,
 };
 
@@ -523,6 +524,90 @@ impl ConnectionTools {
                 "elapsed_ms": response.elapsed_ms
             }),
         })
+    }
+
+    pub async fn road_create_network(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: RoadNetworkArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "road.create_network",
+                Command::RoadCreateNetwork {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_scene_assembly("road.create_network", &response)?;
+        Ok(scene_assembly_response(
+            "road.create_network",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn scene_bulk_place_on_grid(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GridPlacementArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "scene.bulk_place_on_grid",
+                Command::SceneBulkPlaceOnGrid {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_scene_assembly("scene.bulk_place_on_grid", &response)?;
+        Ok(scene_assembly_response(
+            "scene.bulk_place_on_grid",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn scene_create_city_block(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: CityBlockArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "scene.create_city_block",
+                Command::SceneCreateCityBlock {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_scene_assembly("scene.create_city_block", &response)?;
+        Ok(scene_assembly_response(
+            "scene.create_city_block",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn scene_create_district(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: DistrictArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "scene.create_district",
+                Command::SceneCreateDistrict {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_scene_assembly("scene.create_district", &response)?;
+        Ok(scene_assembly_response(
+            "scene.create_district",
+            response.elapsed_ms,
+            result,
+        ))
     }
 
     pub async fn material_create(
@@ -1283,6 +1368,23 @@ fn expect_static_mesh_operation(
     }
 }
 
+fn expect_scene_assembly(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<SceneAssemblyResult> {
+    match response.results.as_slice() {
+        [CommandResult::SceneAssembly(result)] => Ok(result.clone()),
+        [] => bail!("unexpected {command_name} response: missing scene assembly result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected scene assembly result, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one scene assembly result, got {} results",
+            results.len()
+        ),
+    }
+}
+
 fn expect_material_operation(
     command_name: &str,
     response: &ResponseEnvelope,
@@ -1482,6 +1584,26 @@ fn generated_mesh_response(
             "created": operation.created,
             "vertex_count": operation.vertex_count,
             "triangle_count": operation.triangle_count,
+            "elapsed_ms": elapsed_ms
+        }),
+    }
+}
+
+fn scene_assembly_response(
+    tool_name: &'static str,
+    elapsed_ms: u32,
+    result: SceneAssemblyResult,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary: format!("Assembled scene with {} actor(s).", result.count),
+        data: json!({
+            "count": result.count,
+            "road_count": result.road_count,
+            "sidewalk_count": result.sidewalk_count,
+            "building_count": result.building_count,
+            "prop_count": result.prop_count,
+            "spawned": result.spawned,
             "elapsed_ms": elapsed_ms
         }),
     }
@@ -1853,6 +1975,175 @@ impl StaticMeshCollisionArgs {
             collision_trace: self.collision_trace,
             simple_collision: self.simple_collision,
             rebuild: self.rebuild,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RoadNetworkArgs {
+    name_prefix: String,
+    scene: Option<String>,
+    group: Option<String>,
+    #[serde(default)]
+    origin: [f64; 3],
+    #[serde(default = "default_scene_rows")]
+    rows: u32,
+    #[serde(default = "default_scene_columns")]
+    columns: u32,
+    #[serde(default = "default_block_size")]
+    block_size: [f64; 2],
+    #[serde(default = "default_road_width")]
+    road_width: f64,
+    #[serde(default = "default_road_thickness")]
+    road_thickness: f64,
+    road_mesh: Option<String>,
+}
+
+impl RoadNetworkArgs {
+    fn into_spec(self) -> RoadNetworkSpec {
+        RoadNetworkSpec {
+            name_prefix: self.name_prefix,
+            scene: self.scene,
+            group: self.group,
+            origin: self.origin,
+            rows: self.rows,
+            columns: self.columns,
+            block_size: self.block_size,
+            road_width: self.road_width,
+            road_thickness: self.road_thickness,
+            road_mesh: self.road_mesh,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GridPlacementArgs {
+    name_prefix: String,
+    mesh: String,
+    scene: Option<String>,
+    group: Option<String>,
+    #[serde(default)]
+    origin: [f64; 3],
+    #[serde(default = "default_scene_rows")]
+    rows: u32,
+    #[serde(default = "default_scene_columns")]
+    columns: u32,
+    #[serde(default = "default_grid_spacing")]
+    spacing: [f64; 2],
+    #[serde(default)]
+    rotation: [f64; 3],
+    #[serde(default = "default_scale")]
+    scale: [f64; 3],
+    #[serde(default)]
+    yaw_variation: f64,
+    #[serde(default)]
+    scale_variation: f64,
+    #[serde(default)]
+    seed: u32,
+}
+
+impl GridPlacementArgs {
+    fn into_spec(self) -> GridPlacementSpec {
+        GridPlacementSpec {
+            name_prefix: self.name_prefix,
+            mesh: self.mesh,
+            scene: self.scene,
+            group: self.group,
+            origin: self.origin,
+            rows: self.rows,
+            columns: self.columns,
+            spacing: self.spacing,
+            rotation: self.rotation,
+            scale: self.scale,
+            yaw_variation: self.yaw_variation,
+            scale_variation: self.scale_variation,
+            seed: self.seed,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CityBlockArgs {
+    name_prefix: String,
+    scene: Option<String>,
+    group: Option<String>,
+    #[serde(default)]
+    origin: [f64; 3],
+    #[serde(default = "default_block_size")]
+    size: [f64; 2],
+    #[serde(default = "default_road_width")]
+    road_width: f64,
+    #[serde(default = "default_sidewalk_width")]
+    sidewalk_width: f64,
+    road_mesh: Option<String>,
+    sidewalk_mesh: Option<String>,
+    building_mesh: String,
+    #[serde(default = "default_city_building_rows")]
+    building_rows: u32,
+    #[serde(default = "default_city_building_columns")]
+    building_columns: u32,
+    #[serde(default = "default_city_building_scale")]
+    building_scale: [f64; 3],
+    #[serde(default)]
+    seed: u32,
+}
+
+impl CityBlockArgs {
+    fn into_spec(self) -> CityBlockSpec {
+        CityBlockSpec {
+            name_prefix: self.name_prefix,
+            scene: self.scene,
+            group: self.group,
+            origin: self.origin,
+            size: self.size,
+            road_width: self.road_width,
+            sidewalk_width: self.sidewalk_width,
+            road_mesh: self.road_mesh,
+            sidewalk_mesh: self.sidewalk_mesh,
+            building_mesh: self.building_mesh,
+            building_rows: self.building_rows,
+            building_columns: self.building_columns,
+            building_scale: self.building_scale,
+            seed: self.seed,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DistrictArgs {
+    name_prefix: String,
+    #[serde(default = "default_district_preset")]
+    preset: String,
+    scene: Option<String>,
+    group: Option<String>,
+    #[serde(default)]
+    origin: [f64; 3],
+    #[serde(default = "default_district_blocks")]
+    blocks: [u32; 2],
+    #[serde(default = "default_block_size")]
+    block_size: [f64; 2],
+    #[serde(default = "default_road_width")]
+    road_width: f64,
+    road_mesh: Option<String>,
+    building_mesh: String,
+    #[serde(default)]
+    seed: u32,
+}
+
+impl DistrictArgs {
+    fn into_spec(self) -> DistrictSpec {
+        DistrictSpec {
+            name_prefix: self.name_prefix,
+            preset: self.preset,
+            scene: self.scene,
+            group: self.group,
+            origin: self.origin,
+            blocks: self.blocks,
+            block_size: self.block_size,
+            road_width: self.road_width,
+            road_mesh: self.road_mesh,
+            building_mesh: self.building_mesh,
+            seed: self.seed,
         }
     }
 }
@@ -2437,6 +2728,54 @@ fn default_sign_depth() -> f64 {
 
 fn default_collision_trace() -> String {
     "project_default".to_string()
+}
+
+fn default_scene_rows() -> u32 {
+    2
+}
+
+fn default_scene_columns() -> u32 {
+    2
+}
+
+fn default_block_size() -> [f64; 2] {
+    [2400.0, 1800.0]
+}
+
+fn default_road_width() -> f64 {
+    320.0
+}
+
+fn default_road_thickness() -> f64 {
+    20.0
+}
+
+fn default_grid_spacing() -> [f64; 2] {
+    [600.0, 600.0]
+}
+
+fn default_sidewalk_width() -> f64 {
+    180.0
+}
+
+fn default_city_building_rows() -> u32 {
+    2
+}
+
+fn default_city_building_columns() -> u32 {
+    2
+}
+
+fn default_city_building_scale() -> [f64; 3] {
+    [3.0, 3.0, 8.0]
+}
+
+fn default_district_preset() -> String {
+    "downtown".to_string()
+}
+
+fn default_district_blocks() -> [u32; 2] {
+    [2, 2]
 }
 
 fn default_moon_rotation() -> [f64; 3] {

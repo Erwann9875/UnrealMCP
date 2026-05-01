@@ -69,6 +69,10 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
             "mesh.create_building",
             "mesh.create_sign",
             "static_mesh.set_collision",
+            "road.create_network",
+            "scene.bulk_place_on_grid",
+            "scene.create_city_block",
+            "scene.create_district",
             "material.create",
             "material.create_instance",
             "material.create_procedural_texture",
@@ -173,6 +177,22 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     assert_eq!(
         tool_by_name("static_mesh.set_collision")["inputSchema"]["required"],
         json!(["paths"])
+    );
+    assert_eq!(
+        tool_by_name("road.create_network")["inputSchema"]["required"],
+        json!(["name_prefix"])
+    );
+    assert_eq!(
+        tool_by_name("scene.bulk_place_on_grid")["inputSchema"]["required"],
+        json!(["name_prefix", "mesh"])
+    );
+    assert_eq!(
+        tool_by_name("scene.create_city_block")["inputSchema"]["required"],
+        json!(["name_prefix", "building_mesh"])
+    );
+    assert_eq!(
+        tool_by_name("scene.create_district")["inputSchema"]["required"],
+        json!(["name_prefix", "building_mesh"])
     );
     assert_eq!(
         tool_by_name("material.create")["inputSchema"]["required"],
@@ -557,6 +577,120 @@ async fn stdio_tools_call_dispatches_generated_mesh_and_collision_tools() {
         .as_str()
         .expect("summary text")
         .contains("Updated collision for 1 static mesh"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_scene_assembly_tools() {
+    let road_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 36,
+        "method": "tools/call",
+        "params": {
+            "name": "road.create_network",
+            "arguments": {
+                "name_prefix": "MCP_Road",
+                "scene": "la",
+                "group": "downtown_roads",
+                "origin": [0.0, 0.0, 0.0],
+                "rows": 2,
+                "columns": 3,
+                "block_size": [2400.0, 1800.0],
+                "road_width": 320.0,
+                "road_thickness": 20.0
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(road_response["result"]["isError"], false);
+    let road_content = road_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(road_content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Assembled scene with"));
+
+    let grid_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 37,
+        "method": "tools/call",
+        "params": {
+            "name": "scene.bulk_place_on_grid",
+            "arguments": {
+                "name_prefix": "MCP_Tower",
+                "mesh": "/Game/MCP/Meshes/SM_Tower",
+                "scene": "la",
+                "group": "downtown_buildings",
+                "rows": 2,
+                "columns": 3,
+                "spacing": [500.0, 600.0],
+                "yaw_variation": 12.0,
+                "scale_variation": 0.2,
+                "seed": 42
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(grid_response["result"]["isError"], false);
+    let grid_content = grid_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(grid_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"building_count\""));
+
+    let block_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 38,
+        "method": "tools/call",
+        "params": {
+            "name": "scene.create_city_block",
+            "arguments": {
+                "name_prefix": "MCP_Block",
+                "building_mesh": "/Game/MCP/Meshes/SM_Tower",
+                "building_rows": 2,
+                "building_columns": 2
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(block_response["result"]["isError"], false);
+    let block_content = block_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(block_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"road_count\""));
+
+    let district_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 39,
+        "method": "tools/call",
+        "params": {
+            "name": "scene.create_district",
+            "arguments": {
+                "name_prefix": "MCP_Downtown",
+                "preset": "downtown",
+                "building_mesh": "/Game/MCP/Meshes/SM_Tower",
+                "blocks": [2, 2]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(district_response["result"]["isError"], false);
+    let district_content = district_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(district_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"prop_count\""));
 }
 
 #[tokio::test]

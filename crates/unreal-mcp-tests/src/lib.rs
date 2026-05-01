@@ -10,8 +10,8 @@ use unreal_mcp_protocol::{
     GeneratedMeshOperation, LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightSummary,
     LightingOperation, MaterialAppliedActor, MaterialApplyResult, MaterialOperation,
     MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
-    ProceduralTextureOperation, ResponseEnvelope, RuntimeAnimationOperation, SpawnedActor,
-    StaticMeshOperation, StaticMeshOperationResult, Transform, WorldQueryResult,
+    ProceduralTextureOperation, ResponseEnvelope, RuntimeAnimationOperation, SceneAssemblyResult,
+    SpawnedActor, StaticMeshOperation, StaticMeshOperationResult, Transform, WorldQueryResult,
 };
 
 pub struct FakeBridge {
@@ -97,6 +97,10 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "mesh.create_building".to_string(),
                     "mesh.create_sign".to_string(),
                     "static_mesh.set_collision".to_string(),
+                    "road.create_network".to_string(),
+                    "scene.bulk_place_on_grid".to_string(),
+                    "scene.create_city_block".to_string(),
+                    "scene.create_district".to_string(),
                     "material.create".to_string(),
                     "material.create_instance".to_string(),
                     "material.create_procedural_texture".to_string(),
@@ -290,6 +294,38 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     count: meshes.len(),
                     meshes,
                 })
+            }
+            Command::RoadCreateNetwork { spec } => {
+                let road_count = (spec.rows as usize + 1) + (spec.columns as usize + 1);
+                scene_assembly_result(&spec.name_prefix, road_count, road_count, 0, 0, 0)
+            }
+            Command::SceneBulkPlaceOnGrid { spec } => {
+                let building_count = spec.rows as usize * spec.columns as usize;
+                scene_assembly_result(&spec.name_prefix, building_count, 0, 0, building_count, 0)
+            }
+            Command::SceneCreateCityBlock { spec } => {
+                let building_count = spec.building_rows as usize * spec.building_columns as usize;
+                scene_assembly_result(
+                    &spec.name_prefix,
+                    8 + building_count,
+                    4,
+                    4,
+                    building_count,
+                    0,
+                )
+            }
+            Command::SceneCreateDistrict { spec } => {
+                let block_count = spec.blocks[0] as usize * spec.blocks[1] as usize;
+                let building_count = block_count * 4;
+                let road_count = (spec.blocks[0] as usize + 1) + (spec.blocks[1] as usize + 1);
+                scene_assembly_result(
+                    &spec.name_prefix,
+                    road_count + building_count,
+                    road_count,
+                    0,
+                    building_count,
+                    block_count,
+                )
             }
             Command::MaterialCreate { path, .. } => {
                 CommandResult::MaterialOperation(MaterialOperation {
@@ -509,6 +545,31 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
         .await?;
     stream.write_all(&response_body).await?;
     Ok(())
+}
+
+fn scene_assembly_result(
+    name_prefix: &str,
+    count: usize,
+    road_count: usize,
+    sidewalk_count: usize,
+    building_count: usize,
+    prop_count: usize,
+) -> CommandResult {
+    let spawned = (0..count)
+        .map(|index| SpawnedActor {
+            name: format!("{name_prefix}_{index}"),
+            path: format!("PersistentLevel.{name_prefix}_{index}"),
+        })
+        .collect::<Vec<_>>();
+
+    CommandResult::SceneAssembly(SceneAssemblyResult {
+        spawned,
+        count,
+        road_count,
+        sidewalk_count,
+        building_count,
+        prop_count,
+    })
 }
 
 #[cfg(test)]
