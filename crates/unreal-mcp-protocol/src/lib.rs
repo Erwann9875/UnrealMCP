@@ -8,8 +8,10 @@ pub use codec::{
     encode_json_request, encode_json_response, encode_msgpack_request, encode_msgpack_response,
 };
 pub use commands::{
-    ActorQuery, ActorSpawnSpec, BridgeStatus, Command, CommandResult, LevelInfo, LevelList,
-    LevelOperation, SpawnedActor, Transform, WorldQueryResult,
+    ActorQuery, ActorSpawnSpec, AssetOperation, BridgeStatus, Command, CommandResult, LevelInfo,
+    LevelList, LevelOperation, MaterialAppliedActor, MaterialApplyResult, MaterialAssignment,
+    MaterialOperation, MaterialParameter, MaterialParameterOperation, MaterialParameterValue,
+    ProceduralTextureOperation, SpawnedActor, TextureCreateSpec, Transform, WorldQueryResult,
 };
 pub use envelope::{ErrorMode, IndexedError, RequestEnvelope, ResponseEnvelope, ResponseMode};
 pub use error::{ProtocolError, ProtocolResult};

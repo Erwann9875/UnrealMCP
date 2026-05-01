@@ -1,7 +1,9 @@
 use unreal_mcp_protocol::{
-    ActorQuery, ActorSpawnSpec, Command, CommandResult, ErrorMode, IndexedError, LevelInfo,
-    LevelList, LevelOperation, ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode,
-    SpawnedActor, Transform, WorldQueryResult,
+    ActorQuery, ActorSpawnSpec, AssetOperation, Command, CommandResult, ErrorMode, IndexedError,
+    LevelInfo, LevelList, LevelOperation, MaterialAppliedActor, MaterialApplyResult,
+    MaterialAssignment, MaterialOperation, MaterialParameter, MaterialParameterOperation,
+    ProceduralTextureOperation, ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode,
+    SpawnedActor, TextureCreateSpec, Transform, WorldQueryResult,
 };
 
 #[test]
@@ -143,6 +145,135 @@ fn world_query_response_roundtrip_preserves_payload() {
     let decoded = decode_json_response(&text).expect("decode response");
 
     assert_eq!(decoded, response);
+}
+
+#[test]
+fn material_requests_roundtrip_preserve_payloads() {
+    let request = RequestEnvelope::new(
+        54,
+        ResponseMode::Handles,
+        ErrorMode::Stop,
+        vec![
+            Command::AssetCreateFolder {
+                path: "/Game/MCP/Materials".to_string(),
+            },
+            Command::MaterialCreate {
+                path: "/Game/MCP/Materials/M_TestConcrete".to_string(),
+                base_color: [0.45, 0.45, 0.42, 1.0],
+                metallic: 0.0,
+                roughness: 0.8,
+                specular: 0.4,
+                emissive_color: [0.0, 0.0, 0.0, 1.0],
+            },
+            Command::MaterialCreateProceduralTexture {
+                spec: TextureCreateSpec {
+                    path: "/Game/MCP/Materials/T_Checker".to_string(),
+                    pattern: "checker".to_string(),
+                    width: 64,
+                    height: 64,
+                    color_a: [0.1, 0.1, 0.1, 1.0],
+                    color_b: [0.8, 0.8, 0.8, 1.0],
+                    checker_size: 8,
+                },
+            },
+            Command::MaterialBulkApply {
+                assignments: vec![MaterialAssignment {
+                    material: "/Game/MCP/Materials/M_TestConcrete".to_string(),
+                    names: vec![],
+                    tags: vec!["mcp.group:buildings".to_string()],
+                    slot: 0,
+                }],
+            },
+            Command::WorldBulkSetMaterials {
+                names: vec!["Tower_A".to_string()],
+                tags: vec![],
+                material: "/Game/MCP/Materials/M_TestConcrete".to_string(),
+                slot: 0,
+            },
+        ],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn material_results_roundtrip_preserve_payloads() {
+    let response = ResponseEnvelope::success(
+        55,
+        7,
+        vec![
+            CommandResult::AssetOperation(AssetOperation {
+                path: "/Game/MCP/Materials".to_string(),
+                created: true,
+            }),
+            CommandResult::MaterialOperation(MaterialOperation {
+                path: "/Game/MCP/Materials/M_TestConcrete".to_string(),
+                parent: None,
+                created: true,
+            }),
+            CommandResult::ProceduralTextureOperation(ProceduralTextureOperation {
+                path: "/Game/MCP/Materials/T_Checker".to_string(),
+                width: 64,
+                height: 64,
+                created: true,
+            }),
+            CommandResult::MaterialParameterOperation(MaterialParameterOperation {
+                path: "/Game/MCP/Materials/MI_Test".to_string(),
+                scalar_count: 1,
+                vector_count: 1,
+                texture_count: 0,
+            }),
+            CommandResult::MaterialApply(MaterialApplyResult {
+                applied: vec![MaterialAppliedActor {
+                    name: "Tower_A".to_string(),
+                    path: "PersistentLevel.Tower_A".to_string(),
+                    material: "/Game/MCP/Materials/M_TestConcrete".to_string(),
+                    slot: 0,
+                }],
+                count: 1,
+            }),
+        ],
+    );
+
+    let bytes = encode_msgpack_response(&response).expect("encode response");
+    let decoded = decode_msgpack_response(&bytes).expect("decode response");
+
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn material_instance_and_parameter_requests_roundtrip() {
+    let request = RequestEnvelope::new(
+        56,
+        ResponseMode::Summary,
+        ErrorMode::Stop,
+        vec![
+            Command::MaterialCreateInstance {
+                path: "/Game/MCP/Materials/MI_Test".to_string(),
+                parent: "/Game/MCP/Materials/M_TestConcrete".to_string(),
+                scalar_parameters: vec![MaterialParameter::scalar("Roughness", 0.35)],
+                vector_parameters: vec![MaterialParameter::vector("Tint", [0.2, 0.4, 1.0, 1.0])],
+                texture_parameters: vec![MaterialParameter::texture(
+                    "Albedo",
+                    "/Game/MCP/Materials/T_Checker",
+                )],
+            },
+            Command::MaterialSetParameters {
+                path: "/Game/MCP/Materials/MI_Test".to_string(),
+                scalar_parameters: vec![MaterialParameter::scalar("Intensity", 10.0)],
+                vector_parameters: vec![],
+                texture_parameters: vec![],
+            },
+        ],
+    );
+
+    let bytes = encode_msgpack_request(&request).expect("encode request");
+    let decoded = decode_msgpack_request(&bytes).expect("decode request");
+
+    assert_eq!(decoded, request);
 }
 
 #[test]
