@@ -17,9 +17,11 @@ public class UnrealMCPBridge : ModuleRules
         {
             "AssetRegistry",
             "AssetTools",
+            "BlueprintGraph",
             "EditorSubsystem",
             "Json",
             "JsonUtilities",
+            "KismetCompiler",
             "MaterialEditor",
             "Networking",
             "Projects",
