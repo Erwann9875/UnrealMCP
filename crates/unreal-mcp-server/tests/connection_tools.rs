@@ -1,7 +1,7 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use unreal_mcp_protocol::{Command, CommandResult, ErrorMode, RequestEnvelope, ResponseMode};
-use unreal_mcp_server::BridgeClient;
+use unreal_mcp_server::{BridgeClient, ConnectionTools, ToolResponse};
 use unreal_mcp_tests::start_fake_bridge;
 
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -27,6 +27,17 @@ async fn bridge_client_sends_ping_and_receives_pong() {
         &response.results[0],
         CommandResult::Pong { bridge_version } if bridge_version == "fake-0.1.0"
     ));
+}
+
+#[tokio::test]
+async fn connection_tools_return_compact_ping_response() {
+    let fake = start_fake_bridge().await.expect("fake bridge");
+    let tools = ConnectionTools::new(BridgeClient::new(fake.address().to_string()));
+
+    let response: ToolResponse = tools.ping().await.expect("ping response");
+
+    assert_eq!(response.tool_name, "connection.ping");
+    assert!(response.summary.contains("fake-0.1.0"));
 }
 
 #[tokio::test]
