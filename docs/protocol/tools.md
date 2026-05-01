@@ -159,6 +159,121 @@ Creates a Content Browser folder path.
 }
 ```
 
+## `asset.import_texture`
+
+Imports one local texture file into a Content Browser asset. `srgb` is applied
+after import when present.
+
+```json
+{
+  "source_file": "C:/Temp/asphalt.png",
+  "destination_path": "/Game/MCP/Textures/T_Asphalt",
+  "replace_existing": true,
+  "save": false,
+  "srgb": true
+}
+```
+
+## `asset.import_static_mesh`
+
+Imports one local static mesh file into a Content Browser asset. Generated
+simple collision can be enabled with `generate_collision`.
+
+```json
+{
+  "source_file": "C:/Temp/tower.fbx",
+  "destination_path": "/Game/MCP/Meshes/SM_Tower",
+  "replace_existing": true,
+  "save": false,
+  "generate_collision": true
+}
+```
+
+## `asset.bulk_import`
+
+Imports many texture/static mesh files in one bridge request. Each item returns
+`source_file`, `path`, `class_name`, `imported`, and optional `message`.
+
+```json
+{
+  "items": [
+    {
+      "kind": "texture",
+      "source_file": "C:/Temp/asphalt.png",
+      "destination_path": "/Game/MCP/Textures/T_Asphalt",
+      "srgb": true
+    },
+    {
+      "kind": "static_mesh",
+      "source_file": "C:/Temp/tower.fbx",
+      "destination_path": "/Game/MCP/Meshes/SM_Tower",
+      "generate_collision": true
+    }
+  ]
+}
+```
+
+## `asset.validate`
+
+Validates asset paths and returns compact existence/class data.
+
+```json
+{
+  "paths": [
+    "/Game/MCP/Textures/T_Asphalt",
+    "/Game/MCP/Meshes/SM_Tower"
+  ]
+}
+```
+
+## `mesh.create_building`
+
+Creates or updates a reusable generated `UStaticMesh` building asset. The mesh
+uses a cuboid body plus simple raised window panels, and its pivot is at the
+base center so spawned actors sit on the ground.
+
+```json
+{
+  "path": "/Game/MCP/Meshes/SM_DTLA_Tower_A",
+  "width": 800.0,
+  "depth": 600.0,
+  "height": 2400.0,
+  "floors": 12,
+  "window_rows": 12,
+  "window_columns": 6,
+  "material": "/Game/MCP/Materials/M_Glass"
+}
+```
+
+## `mesh.create_sign`
+
+Creates or updates a reusable generated sign panel static mesh.
+
+```json
+{
+  "path": "/Game/MCP/Meshes/SM_HollywoodSignPanel",
+  "width": 900.0,
+  "height": 240.0,
+  "depth": 30.0,
+  "text": "HOLLYWOOD",
+  "material": "/Game/MCP/Materials/M_WhitePaint"
+}
+```
+
+## `static_mesh.set_collision`
+
+Sets collision trace mode and optional simple box collision for many static
+mesh assets in one request.
+
+```json
+{
+  "paths": ["/Game/MCP/Meshes/SM_DTLA_Tower_A"],
+  "collision_trace": "use_simple_as_complex",
+  "simple_collision": true,
+  "rebuild": true
+}
+```
+
 ## `material.create`
 
 Creates a simple Unreal material asset with parameter nodes wired to common PBR
