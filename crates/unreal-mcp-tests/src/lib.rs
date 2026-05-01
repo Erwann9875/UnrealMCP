@@ -6,9 +6,10 @@ use tokio::task::JoinHandle;
 use unreal_mcp_protocol::{
     decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetOperation,
     BlueprintComponentOperation, BlueprintOperation, BridgeStatus, Command, CommandResult,
-    LevelInfo, LevelList, LevelOperation, LightSummary, LightingOperation, MaterialAppliedActor,
-    MaterialApplyResult, MaterialOperation, MaterialParameterOperation, ProceduralTextureOperation,
-    ResponseEnvelope, RuntimeAnimationOperation, SpawnedActor, Transform, WorldQueryResult,
+    LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightSummary, LightingOperation,
+    MaterialAppliedActor, MaterialApplyResult, MaterialOperation, MaterialParameterOperation,
+    PlacementSnapActor, PlacementSnapResult, ProceduralTextureOperation, ResponseEnvelope,
+    RuntimeAnimationOperation, SpawnedActor, Transform, WorldQueryResult,
 };
 
 pub struct FakeBridge {
@@ -99,6 +100,10 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "lighting.set_post_process".to_string(),
                     "lighting.bulk_set_lights".to_string(),
                     "lighting.set_time_of_day".to_string(),
+                    "landscape.create".to_string(),
+                    "landscape.set_heightfield".to_string(),
+                    "landscape.paint_layers".to_string(),
+                    "placement.bulk_snap_to_ground".to_string(),
                     "blueprint.create_actor".to_string(),
                     "blueprint.add_static_mesh_component".to_string(),
                     "blueprint.add_light_component".to_string(),
@@ -282,6 +287,53 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
             Command::LightingSetTimeOfDay { .. } => {
                 CommandResult::LightingOperation(LightingOperation {
                     changed: vec!["MCP_SunLight".to_string()],
+                    count: 1,
+                })
+            }
+            Command::LandscapeCreate { spec } => {
+                let vertex_count = [
+                    spec.component_count[0] * spec.section_size * spec.sections_per_component + 1,
+                    spec.component_count[1] * spec.section_size * spec.sections_per_component + 1,
+                ];
+                CommandResult::LandscapeOperation(LandscapeOperation {
+                    name: spec.name.clone(),
+                    path: format!("PersistentLevel.{}", spec.name),
+                    component_count: spec.component_count,
+                    vertex_count,
+                    changed: vec!["created".to_string()],
+                })
+            }
+            Command::LandscapeSetHeightfield { patch } => {
+                CommandResult::LandscapeOperation(LandscapeOperation {
+                    name: patch.name.clone(),
+                    path: format!("PersistentLevel.{}", patch.name),
+                    component_count: [2, 2],
+                    vertex_count: [patch.width, patch.height],
+                    changed: vec!["heightfield".to_string()],
+                })
+            }
+            Command::LandscapePaintLayers { paint } => {
+                CommandResult::LandscapeOperation(LandscapeOperation {
+                    name: paint.name.clone(),
+                    path: format!("PersistentLevel.{}", paint.name),
+                    component_count: [2, 2],
+                    vertex_count: [127, 127],
+                    changed: paint.layers,
+                })
+            }
+            Command::PlacementBulkSnapToGround { spec } => {
+                let label = spec
+                    .names
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "MCP_Test_Cube".to_string());
+                CommandResult::PlacementSnap(PlacementSnapResult {
+                    actors: vec![PlacementSnapActor {
+                        name: label.clone(),
+                        path: format!("PersistentLevel.{label}"),
+                        old_location: [0.0, 0.0, 500.0],
+                        new_location: [0.0, 0.0, spec.offset_z],
+                    }],
                     count: 1,
                 })
             }

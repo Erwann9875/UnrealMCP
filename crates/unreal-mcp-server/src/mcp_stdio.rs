@@ -222,6 +222,26 @@ fn tools_list_response(id: Value) -> Value {
                     lighting_time_of_day_schema()
                 ),
                 tool_definition(
+                    "landscape.create",
+                    "Create or update a real Unreal Landscape actor.",
+                    landscape_create_schema()
+                ),
+                tool_definition(
+                    "landscape.set_heightfield",
+                    "Update a landscape heightfield from compact samples or procedural controls.",
+                    landscape_heightfield_schema()
+                ),
+                tool_definition(
+                    "landscape.paint_layers",
+                    "Assign a landscape material and register paint layers.",
+                    landscape_paint_layers_schema()
+                ),
+                tool_definition(
+                    "placement.bulk_snap_to_ground",
+                    "Snap actors selected by names or tags onto ground surfaces.",
+                    placement_bulk_snap_schema()
+                ),
+                tool_definition(
                     "blueprint.create_actor",
                     "Create an actor Blueprint asset.",
                     blueprint_create_actor_schema()
@@ -338,6 +358,15 @@ fn vec4_schema() -> Value {
         "items": { "type": "number" },
         "minItems": 4,
         "maxItems": 4
+    })
+}
+
+fn u32_pair_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "integer", "minimum": 1 },
+        "minItems": 2,
+        "maxItems": 2
     })
 }
 
@@ -639,6 +668,75 @@ fn lighting_time_of_day_schema() -> Value {
     })
 }
 
+fn landscape_create_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "component_count": u32_pair_schema(),
+            "section_size": { "type": "integer", "minimum": 1 },
+            "sections_per_component": { "type": "integer", "minimum": 1 },
+            "location": vec3_schema(),
+            "scale": vec3_schema(),
+            "material": { "type": "string" },
+            "tags": string_array_schema()
+        },
+        "required": ["name"],
+        "additionalProperties": false
+    })
+}
+
+fn landscape_heightfield_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 },
+            "base_height": { "type": "number" },
+            "amplitude": { "type": "number" },
+            "frequency": { "type": "number" },
+            "seed": { "type": "integer", "minimum": 0 },
+            "city_pad_radius": { "type": "number", "minimum": 0 },
+            "city_pad_falloff": { "type": "number", "minimum": 0 },
+            "samples": {
+                "type": "array",
+                "items": { "type": "number" }
+            }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+    })
+}
+
+fn landscape_paint_layers_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "material": { "type": "string" },
+            "layers": string_array_schema()
+        },
+        "required": ["name"],
+        "additionalProperties": false
+    })
+}
+
+fn placement_bulk_snap_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "names": string_array_schema(),
+            "tags": string_array_schema(),
+            "include_generated": { "type": "boolean" },
+            "trace_distance": { "type": "number", "minimum": 0 },
+            "offset_z": { "type": "number" }
+        },
+        "required": [],
+        "additionalProperties": false
+    })
+}
+
 fn blueprint_create_actor_schema() -> Value {
     json!({
         "type": "object",
@@ -861,6 +959,10 @@ async fn call_tool(
         "lighting.set_post_process" => tools.lighting_set_post_process(arguments).await,
         "lighting.bulk_set_lights" => tools.lighting_bulk_set_lights(arguments).await,
         "lighting.set_time_of_day" => tools.lighting_set_time_of_day(arguments).await,
+        "landscape.create" => tools.landscape_create(arguments).await,
+        "landscape.set_heightfield" => tools.landscape_set_heightfield(arguments).await,
+        "landscape.paint_layers" => tools.landscape_paint_layers(arguments).await,
+        "placement.bulk_snap_to_ground" => tools.placement_bulk_snap_to_ground(arguments).await,
         "blueprint.create_actor" => tools.blueprint_create_actor(arguments).await,
         "blueprint.add_static_mesh_component" => {
             tools.blueprint_add_static_mesh_component(arguments).await

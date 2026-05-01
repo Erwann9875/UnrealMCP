@@ -4,11 +4,13 @@ use anyhow::{bail, ensure};
 use serde::Deserialize;
 use unreal_mcp_protocol::{
     ActorSpawnSpec, AssetOperation, BlueprintComponentOperation, BlueprintOperation, BridgeStatus,
-    Command, CommandResult, ErrorMode, LevelOperation, LightComponentSpec, LightSpec,
+    Command, CommandResult, ErrorMode, LandscapeCreateSpec, LandscapeHeightPatch,
+    LandscapeLayerPaint, LandscapeOperation, LevelOperation, LightComponentSpec, LightSpec,
     LightingOperation, MaterialApplyResult, MaterialAssignment, MaterialOperation,
-    MaterialParameter, MaterialParameterOperation, ProceduralTextureOperation, RequestEnvelope,
-    ResponseEnvelope, ResponseMode, RuntimeAnimationOperation, RuntimeAnimationSpec,
-    StaticMeshComponentSpec, TextureCreateSpec, Transform,
+    MaterialParameter, MaterialParameterOperation, PlacementSnapResult, PlacementSnapSpec,
+    ProceduralTextureOperation, RequestEnvelope, ResponseEnvelope, ResponseMode,
+    RuntimeAnimationOperation, RuntimeAnimationSpec, StaticMeshComponentSpec, TextureCreateSpec,
+    Transform,
 };
 
 use crate::BridgeClient;
@@ -683,6 +685,97 @@ impl ConnectionTools {
         ))
     }
 
+    pub async fn landscape_create(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LandscapeCreateArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "landscape.create",
+                Command::LandscapeCreate {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let operation = expect_landscape_operation("landscape.create", &response)?;
+        Ok(landscape_operation_response(
+            "landscape.create",
+            format!("Created landscape {}.", operation.name),
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn landscape_set_heightfield(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LandscapeHeightfieldArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "landscape.set_heightfield",
+                Command::LandscapeSetHeightfield {
+                    patch: args.into_patch(),
+                },
+            )
+            .await?;
+        let operation = expect_landscape_operation("landscape.set_heightfield", &response)?;
+        Ok(landscape_operation_response(
+            "landscape.set_heightfield",
+            format!("Updated landscape heightfield for {}.", operation.name),
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn landscape_paint_layers(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LandscapePaintLayersArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "landscape.paint_layers",
+                Command::LandscapePaintLayers {
+                    paint: args.into_paint(),
+                },
+            )
+            .await?;
+        let operation = expect_landscape_operation("landscape.paint_layers", &response)?;
+        Ok(landscape_operation_response(
+            "landscape.paint_layers",
+            format!("Painted landscape {}.", operation.name),
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn placement_bulk_snap_to_ground(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: PlacementBulkSnapArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "placement.bulk_snap_to_ground",
+                Command::PlacementBulkSnapToGround {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let snapped = expect_placement_snap("placement.bulk_snap_to_ground", &response)?;
+        Ok(ToolResponse {
+            tool_name: "placement.bulk_snap_to_ground",
+            summary: format!("Snapped {} actor(s) to ground.", snapped.count),
+            data: json!({
+                "count": snapped.count,
+                "actors": snapped.actors,
+                "elapsed_ms": response.elapsed_ms
+            }),
+        })
+    }
+
     pub async fn blueprint_create_actor(
         &self,
         arguments: serde_json::Value,
@@ -1094,6 +1187,40 @@ fn expect_runtime_animation_operation(
     }
 }
 
+fn expect_landscape_operation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<LandscapeOperation> {
+    match response.results.as_slice() {
+        [CommandResult::LandscapeOperation(operation)] => Ok(operation.clone()),
+        [] => bail!("unexpected {command_name} response: missing landscape operation result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected landscape operation, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one landscape operation result, got {} results",
+            results.len()
+        ),
+    }
+}
+
+fn expect_placement_snap(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<PlacementSnapResult> {
+    match response.results.as_slice() {
+        [CommandResult::PlacementSnap(result)] => Ok(result.clone()),
+        [] => bail!("unexpected {command_name} response: missing placement snap result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected placement snap result, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one placement snap result, got {} results",
+            results.len()
+        ),
+    }
+}
+
 fn material_operation_response(
     tool_name: &'static str,
     summary: String,
@@ -1156,6 +1283,26 @@ fn lighting_operation_response(
         summary: format!("Updated {} lighting actor(s).", operation.count),
         data: json!({
             "count": operation.count,
+            "changed": operation.changed,
+            "elapsed_ms": elapsed_ms
+        }),
+    }
+}
+
+fn landscape_operation_response(
+    tool_name: &'static str,
+    summary: String,
+    elapsed_ms: u32,
+    operation: LandscapeOperation,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary,
+        data: json!({
+            "name": operation.name,
+            "path": operation.path,
+            "component_count": operation.component_count,
+            "vertex_count": operation.vertex_count,
             "changed": operation.changed,
             "elapsed_ms": elapsed_ms
         }),
@@ -1507,6 +1654,123 @@ struct LightingTimeOfDayArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct LandscapeCreateArgs {
+    name: String,
+    #[serde(default = "default_landscape_component_count")]
+    component_count: [u32; 2],
+    #[serde(default = "default_landscape_section_size")]
+    section_size: u32,
+    #[serde(default = "default_landscape_sections_per_component")]
+    sections_per_component: u32,
+    #[serde(default)]
+    location: [f64; 3],
+    #[serde(default = "default_landscape_scale")]
+    scale: [f64; 3],
+    material: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+impl LandscapeCreateArgs {
+    fn into_spec(self) -> LandscapeCreateSpec {
+        LandscapeCreateSpec {
+            name: self.name,
+            component_count: self.component_count,
+            section_size: self.section_size,
+            sections_per_component: self.sections_per_component,
+            location: self.location,
+            scale: self.scale,
+            material: self.material,
+            tags: self.tags,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LandscapeHeightfieldArgs {
+    name: String,
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
+    #[serde(default)]
+    base_height: f64,
+    #[serde(default = "default_landscape_amplitude")]
+    amplitude: f64,
+    #[serde(default = "default_landscape_frequency")]
+    frequency: f64,
+    #[serde(default)]
+    seed: u32,
+    #[serde(default)]
+    city_pad_radius: f64,
+    #[serde(default = "default_city_pad_falloff")]
+    city_pad_falloff: f64,
+    #[serde(default)]
+    samples: Vec<f64>,
+}
+
+impl LandscapeHeightfieldArgs {
+    fn into_patch(self) -> LandscapeHeightPatch {
+        LandscapeHeightPatch {
+            name: self.name,
+            width: self.width,
+            height: self.height,
+            base_height: self.base_height,
+            amplitude: self.amplitude,
+            frequency: self.frequency,
+            seed: self.seed,
+            city_pad_radius: self.city_pad_radius,
+            city_pad_falloff: self.city_pad_falloff,
+            samples: self.samples,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct LandscapePaintLayersArgs {
+    name: String,
+    material: Option<String>,
+    #[serde(default)]
+    layers: Vec<String>,
+}
+
+impl LandscapePaintLayersArgs {
+    fn into_paint(self) -> LandscapeLayerPaint {
+        LandscapeLayerPaint {
+            name: self.name,
+            material: self.material,
+            layers: self.layers,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PlacementBulkSnapArgs {
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    include_generated: bool,
+    #[serde(default = "default_trace_distance")]
+    trace_distance: f64,
+    #[serde(default)]
+    offset_z: f64,
+}
+
+impl PlacementBulkSnapArgs {
+    fn into_spec(self) -> PlacementSnapSpec {
+        PlacementSnapSpec {
+            names: self.names,
+            tags: self.tags,
+            include_generated: self.include_generated,
+            trace_distance: self.trace_distance,
+            offset_z: self.offset_z,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct BlueprintCreateActorArgs {
     path: String,
     #[serde(default = "default_blueprint_parent_class")]
@@ -1817,6 +2081,38 @@ fn default_sun_intensity() -> f64 {
 
 fn default_sun_color() -> [f64; 4] {
     [1.0, 0.93, 0.82, 1.0]
+}
+
+fn default_landscape_component_count() -> [u32; 2] {
+    [4, 4]
+}
+
+fn default_landscape_section_size() -> u32 {
+    63
+}
+
+fn default_landscape_sections_per_component() -> u32 {
+    1
+}
+
+fn default_landscape_scale() -> [f64; 3] {
+    [100.0, 100.0, 100.0]
+}
+
+fn default_landscape_amplitude() -> f64 {
+    0.0
+}
+
+fn default_landscape_frequency() -> f64 {
+    1.0
+}
+
+fn default_city_pad_falloff() -> f64 {
+    1000.0
+}
+
+fn default_trace_distance() -> f64 {
+    50000.0
 }
 
 fn default_blueprint_parent_class() -> String {

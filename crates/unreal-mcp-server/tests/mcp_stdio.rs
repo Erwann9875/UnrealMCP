@@ -74,6 +74,10 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
             "lighting.set_post_process",
             "lighting.bulk_set_lights",
             "lighting.set_time_of_day",
+            "landscape.create",
+            "landscape.set_heightfield",
+            "landscape.paint_layers",
+            "placement.bulk_snap_to_ground",
             "blueprint.create_actor",
             "blueprint.add_static_mesh_component",
             "blueprint.add_light_component",
@@ -155,6 +159,22 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     assert_eq!(
         light_schema["properties"]["kind"]["enum"],
         json!(["point", "rect", "spot"])
+    );
+    assert_eq!(
+        tool_by_name("landscape.create")["inputSchema"]["required"],
+        json!(["name"])
+    );
+    assert_eq!(
+        tool_by_name("landscape.set_heightfield")["inputSchema"]["required"],
+        json!(["name"])
+    );
+    assert_eq!(
+        tool_by_name("landscape.paint_layers")["inputSchema"]["required"],
+        json!(["name"])
+    );
+    assert_eq!(
+        tool_by_name("placement.bulk_snap_to_ground")["inputSchema"]["required"],
+        json!([])
     );
     assert_eq!(
         tool_by_name("blueprint.create_actor")["inputSchema"]["required"],
@@ -422,6 +442,125 @@ async fn stdio_tools_call_dispatches_lighting_bulk_set_lights() {
         .as_str()
         .expect("data text")
         .contains("MCP_StreetLight_001"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_landscape_create() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 15,
+        "method": "tools/call",
+        "params": {
+            "name": "landscape.create",
+            "arguments": {
+                "name": "MCP_Landscape",
+                "component_count": [2, 2],
+                "section_size": 63,
+                "sections_per_component": 1,
+                "material": "/Game/MCP/Materials/M_Ground",
+                "tags": ["mcp.scene:grounding"]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Created landscape"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("MCP_Landscape"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_landscape_set_heightfield() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 16,
+        "method": "tools/call",
+        "params": {
+            "name": "landscape.set_heightfield",
+            "arguments": {
+                "name": "MCP_Landscape",
+                "width": 127,
+                "height": 127,
+                "amplitude": 500.0,
+                "frequency": 2.0,
+                "city_pad_radius": 2500.0
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Updated landscape heightfield"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_landscape_paint_layers() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 17,
+        "method": "tools/call",
+        "params": {
+            "name": "landscape.paint_layers",
+            "arguments": {
+                "name": "MCP_Landscape",
+                "material": "/Game/MCP/Materials/M_Ground",
+                "layers": ["Concrete", "Hills"]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Painted landscape"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_placement_bulk_snap_to_ground() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 18,
+        "method": "tools/call",
+        "params": {
+            "name": "placement.bulk_snap_to_ground",
+            "arguments": {
+                "tags": ["mcp.group:buildings"],
+                "include_generated": true,
+                "trace_distance": 20000.0,
+                "offset_z": 50.0
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Snapped 1 actor"));
 }
 
 #[tokio::test]
