@@ -1,3 +1,4 @@
+use crate::envelope::PROTOCOL_VERSION;
 use crate::{ProtocolError, ProtocolResult, RequestEnvelope, ResponseEnvelope};
 
 pub fn encode_msgpack_request(value: &RequestEnvelope) -> ProtocolResult<Vec<u8>> {
@@ -5,7 +6,9 @@ pub fn encode_msgpack_request(value: &RequestEnvelope) -> ProtocolResult<Vec<u8>
 }
 
 pub fn decode_msgpack_request(bytes: &[u8]) -> ProtocolResult<RequestEnvelope> {
-    rmp_serde::from_slice(bytes).map_err(|error| ProtocolError::Decode(error.to_string()))
+    let request =
+        rmp_serde::from_slice(bytes).map_err(|error| ProtocolError::Decode(error.to_string()))?;
+    validate_request(request)
 }
 
 pub fn encode_msgpack_response(value: &ResponseEnvelope) -> ProtocolResult<Vec<u8>> {
@@ -13,7 +16,9 @@ pub fn encode_msgpack_response(value: &ResponseEnvelope) -> ProtocolResult<Vec<u
 }
 
 pub fn decode_msgpack_response(bytes: &[u8]) -> ProtocolResult<ResponseEnvelope> {
-    rmp_serde::from_slice(bytes).map_err(|error| ProtocolError::Decode(error.to_string()))
+    let response =
+        rmp_serde::from_slice(bytes).map_err(|error| ProtocolError::Decode(error.to_string()))?;
+    validate_response(response)
 }
 
 pub fn encode_json_request(value: &RequestEnvelope) -> ProtocolResult<String> {
@@ -21,7 +26,9 @@ pub fn encode_json_request(value: &RequestEnvelope) -> ProtocolResult<String> {
 }
 
 pub fn decode_json_request(text: &str) -> ProtocolResult<RequestEnvelope> {
-    serde_json::from_str(text).map_err(|error| ProtocolError::Decode(error.to_string()))
+    let request =
+        serde_json::from_str(text).map_err(|error| ProtocolError::Decode(error.to_string()))?;
+    validate_request(request)
 }
 
 pub fn encode_json_response(value: &ResponseEnvelope) -> ProtocolResult<String> {
@@ -29,5 +36,29 @@ pub fn encode_json_response(value: &ResponseEnvelope) -> ProtocolResult<String> 
 }
 
 pub fn decode_json_response(text: &str) -> ProtocolResult<ResponseEnvelope> {
-    serde_json::from_str(text).map_err(|error| ProtocolError::Decode(error.to_string()))
+    let response =
+        serde_json::from_str(text).map_err(|error| ProtocolError::Decode(error.to_string()))?;
+    validate_response(response)
+}
+
+fn validate_request(request: RequestEnvelope) -> ProtocolResult<RequestEnvelope> {
+    if request.protocol_version == PROTOCOL_VERSION {
+        Ok(request)
+    } else {
+        Err(ProtocolError::UnsupportedProtocolVersion {
+            actual: request.protocol_version,
+            expected: PROTOCOL_VERSION,
+        })
+    }
+}
+
+fn validate_response(response: ResponseEnvelope) -> ProtocolResult<ResponseEnvelope> {
+    if response.protocol_version == PROTOCOL_VERSION {
+        Ok(response)
+    } else {
+        Err(ProtocolError::UnsupportedProtocolVersion {
+            actual: response.protocol_version,
+            expected: PROTOCOL_VERSION,
+        })
+    }
 }
