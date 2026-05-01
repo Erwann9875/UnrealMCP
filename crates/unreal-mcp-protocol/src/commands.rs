@@ -194,6 +194,21 @@ pub enum Command {
     GameCreateObjectiveFlow {
         spec: GameObjectiveFlowSpec,
     },
+    GameplayCreateSystem {
+        spec: GameplayCreateSystemSpec,
+    },
+    GameplayBindCollectibles {
+        spec: GameplayBindSpec,
+    },
+    GameplayBindCheckpoints {
+        spec: GameplayBindSpec,
+    },
+    GameplayBindInteractions {
+        spec: GameplayBindSpec,
+    },
+    GameplayBindObjectiveFlow {
+        spec: GameplayBindSpec,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -451,6 +466,25 @@ pub struct GameObjectiveFlowSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameplayCreateSystemSpec {
+    pub name: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub location: [f64; 3],
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameplayBindSpec {
+    pub names: Vec<String>,
+    pub tags: Vec<String>,
+    pub manager_name: String,
+    pub include_generated: bool,
+    pub value: i32,
+    pub destroy_on_collect: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LandscapeCreateSpec {
     pub name: String,
     pub component_count: [u32; 2],
@@ -689,6 +723,24 @@ pub struct GameplayOperationResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameplayBindingSummary {
+    pub name: String,
+    pub path: String,
+    pub component: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameplayRuntimeOperationResult {
+    pub manager: Option<SpawnedActor>,
+    pub bindings: Vec<GameplayBindingSummary>,
+    pub count: usize,
+    pub collectible_count: usize,
+    pub checkpoint_count: usize,
+    pub interaction_count: usize,
+    pub objective_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaterialOperation {
     pub path: String,
     pub parent: Option<String>,
@@ -828,4 +880,5 @@ pub enum CommandResult {
     BlueprintComponentOperation(BlueprintComponentOperation),
     RuntimeAnimationOperation(RuntimeAnimationOperation),
     GameplayOperation(GameplayOperationResult),
+    GameplayRuntimeOperation(GameplayRuntimeOperationResult),
 }

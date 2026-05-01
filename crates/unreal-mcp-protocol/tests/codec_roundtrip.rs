@@ -4,6 +4,8 @@ use unreal_mcp_protocol::{
     BlueprintComponentOperation, BlueprintOperation, CityBlockSpec, Command, CommandResult,
     DistrictSpec, ErrorMode, GameCheckpointSpec, GameCollectiblesSpec, GameInteractionSpec,
     GameObjectiveFlowSpec, GameObjectiveStepSpec, GamePlayerSpec, GameplayOperationResult,
+    GameplayBindingSummary, GameplayBindSpec, GameplayCreateSystemSpec,
+    GameplayRuntimeOperationResult,
     GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec, GridPlacementSpec,
     IndexedError, LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint,
     LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightComponentSpec, LightSpec,
@@ -1000,6 +1002,102 @@ fn gameplay_results_roundtrip_preserve_payloads() {
             collectible_count: 1,
             objective_count: 0,
         })],
+    );
+
+    let bytes = encode_msgpack_response(&response).expect("encode response");
+    let decoded = decode_msgpack_response(&bytes).expect("decode response");
+
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn gameplay_runtime_requests_roundtrip_preserve_payloads() {
+    let request = RequestEnvelope::new(
+        70,
+        ResponseMode::Summary,
+        ErrorMode::Continue,
+        vec![
+            Command::GameplayCreateSystem {
+                spec: GameplayCreateSystemSpec {
+                    name: "MCP_GameplayManager".to_string(),
+                    scene: Some("prototype".to_string()),
+                    group: Some("runtime".to_string()),
+                    location: [0.0, 0.0, 100.0],
+                    tags: vec!["mcp.scene:prototype".to_string()],
+                },
+            },
+            Command::GameplayBindCollectibles {
+                spec: GameplayBindSpec {
+                    names: vec!["MCP_Coin_000_000".to_string()],
+                    tags: vec!["mcp.gameplay_actor:collectible".to_string()],
+                    manager_name: "MCP_GameplayManager".to_string(),
+                    include_generated: true,
+                    value: 10,
+                    destroy_on_collect: true,
+                },
+            },
+            Command::GameplayBindCheckpoints {
+                spec: GameplayBindSpec {
+                    names: vec![],
+                    tags: vec!["mcp.gameplay_actor:checkpoint".to_string()],
+                    manager_name: "MCP_GameplayManager".to_string(),
+                    include_generated: true,
+                    value: 0,
+                    destroy_on_collect: false,
+                },
+            },
+            Command::GameplayBindInteractions {
+                spec: GameplayBindSpec {
+                    names: vec![],
+                    tags: vec!["mcp.gameplay_actor:interaction".to_string()],
+                    manager_name: "MCP_GameplayManager".to_string(),
+                    include_generated: true,
+                    value: 0,
+                    destroy_on_collect: false,
+                },
+            },
+            Command::GameplayBindObjectiveFlow {
+                spec: GameplayBindSpec {
+                    names: vec![],
+                    tags: vec!["mcp.gameplay_actor:objective".to_string()],
+                    manager_name: "MCP_GameplayManager".to_string(),
+                    include_generated: true,
+                    value: 0,
+                    destroy_on_collect: false,
+                },
+            },
+        ],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn gameplay_runtime_results_roundtrip_preserve_payloads() {
+    let response = ResponseEnvelope::success(
+        71,
+        5,
+        vec![CommandResult::GameplayRuntimeOperation(
+            GameplayRuntimeOperationResult {
+                manager: Some(SpawnedActor {
+                    name: "MCP_GameplayManager".to_string(),
+                    path: "PersistentLevel.MCP_GameplayManager".to_string(),
+                }),
+                bindings: vec![GameplayBindingSummary {
+                    name: "MCP_Coin_000_000".to_string(),
+                    path: "PersistentLevel.MCP_Coin_000_000".to_string(),
+                    component: "MCP_CollectibleRuntime".to_string(),
+                }],
+                count: 1,
+                collectible_count: 1,
+                checkpoint_count: 0,
+                interaction_count: 0,
+                objective_count: 0,
+            },
+        )],
     );
 
     let bytes = encode_msgpack_response(&response).expect("encode response");
