@@ -220,6 +220,46 @@ fn tools_list_response(id: Value) -> Value {
                     "lighting.set_time_of_day",
                     "Configure one active sun directional light.",
                     lighting_time_of_day_schema()
+                ),
+                tool_definition(
+                    "blueprint.create_actor",
+                    "Create an actor Blueprint asset.",
+                    blueprint_create_actor_schema()
+                ),
+                tool_definition(
+                    "blueprint.add_static_mesh_component",
+                    "Add a static mesh component template to a Blueprint.",
+                    blueprint_static_mesh_component_schema()
+                ),
+                tool_definition(
+                    "blueprint.add_light_component",
+                    "Add a point, rect, or spot light component template to a Blueprint.",
+                    blueprint_light_component_schema()
+                ),
+                tool_definition(
+                    "blueprint.compile",
+                    "Compile an Unreal Blueprint asset.",
+                    blueprint_compile_schema()
+                ),
+                tool_definition(
+                    "runtime.create_led_animation",
+                    "Create a reusable LED material pulse animation asset.",
+                    runtime_animation_schema()
+                ),
+                tool_definition(
+                    "runtime.create_moving_light_animation",
+                    "Create a reusable moving light animation asset.",
+                    runtime_animation_schema()
+                ),
+                tool_definition(
+                    "runtime.create_material_parameter_animation",
+                    "Create a reusable material parameter animation asset.",
+                    runtime_animation_schema()
+                ),
+                tool_definition(
+                    "runtime.attach_animation_to_actor",
+                    "Attach runtime animation assets to placed actors or Blueprints.",
+                    runtime_attach_animation_schema()
                 )
             ]
         }
@@ -599,6 +639,108 @@ fn lighting_time_of_day_schema() -> Value {
     })
 }
 
+fn blueprint_create_actor_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "parent_class": { "type": "string" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn blueprint_compile_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "save": { "type": "boolean" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn blueprint_static_mesh_component_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "blueprint": { "type": "string" },
+            "name": { "type": "string" },
+            "mesh": { "type": "string" },
+            "material": { "type": "string" },
+            "location": vec3_schema(),
+            "rotation": vec3_schema(),
+            "scale": vec3_schema()
+        },
+        "required": ["blueprint", "name", "mesh"],
+        "additionalProperties": false
+    })
+}
+
+fn blueprint_light_component_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "blueprint": { "type": "string" },
+            "name": { "type": "string" },
+            "kind": {
+                "type": "string",
+                "enum": ["point", "rect", "spot"]
+            },
+            "location": vec3_schema(),
+            "rotation": vec3_schema(),
+            "scale": vec3_schema(),
+            "color": vec4_schema(),
+            "intensity": { "type": "number", "minimum": 0 },
+            "attenuation_radius": { "type": "number", "minimum": 0 },
+            "source_radius": { "type": "number", "minimum": 0 },
+            "source_width": { "type": "number", "minimum": 0 },
+            "source_height": { "type": "number", "minimum": 0 }
+        },
+        "required": ["blueprint", "name"],
+        "additionalProperties": false
+    })
+}
+
+fn runtime_animation_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "target_component": { "type": "string" },
+            "parameter_name": { "type": "string" },
+            "color_a": vec4_schema(),
+            "color_b": vec4_schema(),
+            "from_scalar": { "type": "number" },
+            "to_scalar": { "type": "number" },
+            "speed": { "type": "number" },
+            "amplitude": { "type": "number" },
+            "axis": vec3_schema(),
+            "base_intensity": { "type": "number", "minimum": 0 },
+            "phase_offset": { "type": "number" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn runtime_attach_animation_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "names": string_array_schema(),
+            "tags": string_array_schema(),
+            "blueprint": { "type": "string" },
+            "animations": string_array_schema()
+        },
+        "required": ["animations"],
+        "additionalProperties": false
+    })
+}
+
 fn world_bulk_delete_schema() -> Value {
     json!({
         "type": "object",
@@ -719,6 +861,24 @@ async fn call_tool(
         "lighting.set_post_process" => tools.lighting_set_post_process(arguments).await,
         "lighting.bulk_set_lights" => tools.lighting_bulk_set_lights(arguments).await,
         "lighting.set_time_of_day" => tools.lighting_set_time_of_day(arguments).await,
+        "blueprint.create_actor" => tools.blueprint_create_actor(arguments).await,
+        "blueprint.add_static_mesh_component" => {
+            tools.blueprint_add_static_mesh_component(arguments).await
+        }
+        "blueprint.add_light_component" => tools.blueprint_add_light_component(arguments).await,
+        "blueprint.compile" => tools.blueprint_compile(arguments).await,
+        "runtime.create_led_animation" => tools.runtime_create_led_animation(arguments).await,
+        "runtime.create_moving_light_animation" => {
+            tools.runtime_create_moving_light_animation(arguments).await
+        }
+        "runtime.create_material_parameter_animation" => {
+            tools
+                .runtime_create_material_parameter_animation(arguments)
+                .await
+        }
+        "runtime.attach_animation_to_actor" => {
+            tools.runtime_attach_animation_to_actor(arguments).await
+        }
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }

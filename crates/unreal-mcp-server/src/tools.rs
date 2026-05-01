@@ -3,10 +3,12 @@ use serde_json::json;
 use anyhow::{bail, ensure};
 use serde::Deserialize;
 use unreal_mcp_protocol::{
-    ActorSpawnSpec, AssetOperation, BridgeStatus, Command, CommandResult, ErrorMode,
-    LevelOperation, LightSpec, LightingOperation, MaterialApplyResult, MaterialAssignment,
-    MaterialOperation, MaterialParameter, MaterialParameterOperation, ProceduralTextureOperation,
-    RequestEnvelope, ResponseEnvelope, ResponseMode, TextureCreateSpec, Transform,
+    ActorSpawnSpec, AssetOperation, BlueprintComponentOperation, BlueprintOperation, BridgeStatus,
+    Command, CommandResult, ErrorMode, LevelOperation, LightComponentSpec, LightSpec,
+    LightingOperation, MaterialApplyResult, MaterialAssignment, MaterialOperation,
+    MaterialParameter, MaterialParameterOperation, ProceduralTextureOperation, RequestEnvelope,
+    ResponseEnvelope, ResponseMode, RuntimeAnimationOperation, RuntimeAnimationSpec,
+    StaticMeshComponentSpec, TextureCreateSpec, Transform,
 };
 
 use crate::BridgeClient;
@@ -681,6 +683,181 @@ impl ConnectionTools {
         ))
     }
 
+    pub async fn blueprint_create_actor(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: BlueprintCreateActorArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "blueprint.create_actor",
+                Command::BlueprintCreateActor {
+                    path: args.path,
+                    parent_class: args.parent_class,
+                },
+            )
+            .await?;
+        let operation = expect_blueprint_operation("blueprint.create_actor", &response)?;
+        Ok(blueprint_operation_response(
+            "blueprint.create_actor",
+            format!("Created Blueprint {}.", operation.path),
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn blueprint_add_static_mesh_component(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: StaticMeshComponentArgs = serde_json::from_value(arguments)?;
+        let blueprint = args.blueprint.clone();
+        let response = self
+            .send_single(
+                "blueprint.add_static_mesh_component",
+                Command::BlueprintAddStaticMeshComponent {
+                    blueprint,
+                    component: args.into_spec(),
+                },
+            )
+            .await?;
+        let operation =
+            expect_blueprint_component_operation("blueprint.add_static_mesh_component", &response)?;
+        Ok(blueprint_component_response(
+            "blueprint.add_static_mesh_component",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn blueprint_add_light_component(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LightComponentArgs = serde_json::from_value(arguments)?;
+        let blueprint = args.blueprint.clone();
+        let response = self
+            .send_single(
+                "blueprint.add_light_component",
+                Command::BlueprintAddLightComponent {
+                    blueprint,
+                    component: args.into_spec(),
+                },
+            )
+            .await?;
+        let operation =
+            expect_blueprint_component_operation("blueprint.add_light_component", &response)?;
+        Ok(blueprint_component_response(
+            "blueprint.add_light_component",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn blueprint_compile(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: BlueprintCompileArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "blueprint.compile",
+                Command::BlueprintCompile {
+                    path: args.path,
+                    save: args.save,
+                },
+            )
+            .await?;
+        let operation = expect_blueprint_operation("blueprint.compile", &response)?;
+        Ok(blueprint_operation_response(
+            "blueprint.compile",
+            format!("Compiled Blueprint {}.", operation.path),
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn runtime_create_led_animation(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: RuntimeAnimationArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "runtime.create_led_animation",
+                Command::RuntimeCreateLedAnimation {
+                    spec: args.into_spec("EmissiveColor"),
+                },
+            )
+            .await?;
+        runtime_animation_create_response("runtime.create_led_animation", response)
+    }
+
+    pub async fn runtime_create_moving_light_animation(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: RuntimeAnimationArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "runtime.create_moving_light_animation",
+                Command::RuntimeCreateMovingLightAnimation {
+                    spec: args.into_spec("Intensity"),
+                },
+            )
+            .await?;
+        runtime_animation_create_response("runtime.create_moving_light_animation", response)
+    }
+
+    pub async fn runtime_create_material_parameter_animation(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: RuntimeAnimationArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "runtime.create_material_parameter_animation",
+                Command::RuntimeCreateMaterialParameterAnimation {
+                    spec: args.into_spec("GlowAmount"),
+                },
+            )
+            .await?;
+        runtime_animation_create_response("runtime.create_material_parameter_animation", response)
+    }
+
+    pub async fn runtime_attach_animation_to_actor(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: RuntimeAttachAnimationArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "runtime.attach_animation_to_actor",
+                Command::RuntimeAttachAnimationToActor {
+                    names: args.names,
+                    tags: args.tags,
+                    blueprint: args.blueprint,
+                    animations: args.animations,
+                },
+            )
+            .await?;
+        let operation =
+            expect_runtime_animation_operation("runtime.attach_animation_to_actor", &response)?;
+        Ok(ToolResponse {
+            tool_name: "runtime.attach_animation_to_actor",
+            summary: format!(
+                "Attached runtime animation to {} target(s).",
+                operation.count
+            ),
+            data: json!({
+                "path": operation.path,
+                "attached": operation.attached,
+                "count": operation.count,
+                "elapsed_ms": response.elapsed_ms
+            }),
+        })
+    }
+
     async fn send_single(
         &self,
         command_name: &str,
@@ -866,6 +1043,57 @@ fn expect_lighting_operation(
     }
 }
 
+fn expect_blueprint_operation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<BlueprintOperation> {
+    match response.results.as_slice() {
+        [CommandResult::BlueprintOperation(operation)] => Ok(operation.clone()),
+        [] => bail!("unexpected {command_name} response: missing blueprint operation result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected blueprint operation, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one blueprint operation result, got {} results",
+            results.len()
+        ),
+    }
+}
+
+fn expect_blueprint_component_operation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<BlueprintComponentOperation> {
+    match response.results.as_slice() {
+        [CommandResult::BlueprintComponentOperation(operation)] => Ok(operation.clone()),
+        [] => bail!("unexpected {command_name} response: missing blueprint component result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected blueprint component result, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one blueprint component result, got {} results",
+            results.len()
+        ),
+    }
+}
+
+fn expect_runtime_animation_operation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<RuntimeAnimationOperation> {
+    match response.results.as_slice() {
+        [CommandResult::RuntimeAnimationOperation(operation)] => Ok(operation.clone()),
+        [] => bail!("unexpected {command_name} response: missing runtime animation result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected runtime animation result, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one runtime animation result, got {} results",
+            results.len()
+        ),
+    }
+}
+
 fn material_operation_response(
     tool_name: &'static str,
     summary: String,
@@ -932,6 +1160,61 @@ fn lighting_operation_response(
             "elapsed_ms": elapsed_ms
         }),
     }
+}
+
+fn blueprint_operation_response(
+    tool_name: &'static str,
+    summary: String,
+    elapsed_ms: u32,
+    operation: BlueprintOperation,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary,
+        data: json!({
+            "path": operation.path,
+            "created": operation.created,
+            "compiled": operation.compiled,
+            "elapsed_ms": elapsed_ms
+        }),
+    }
+}
+
+fn blueprint_component_response(
+    tool_name: &'static str,
+    elapsed_ms: u32,
+    operation: BlueprintComponentOperation,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary: format!("Updated {} Blueprint component(s).", operation.count),
+        data: json!({
+            "blueprint": operation.blueprint,
+            "components": operation.components,
+            "count": operation.count,
+            "elapsed_ms": elapsed_ms
+        }),
+    }
+}
+
+fn runtime_animation_create_response(
+    tool_name: &'static str,
+    response: ResponseEnvelope,
+) -> anyhow::Result<ToolResponse> {
+    let operation = expect_runtime_animation_operation(tool_name, &response)?;
+    Ok(ToolResponse {
+        tool_name,
+        summary: format!(
+            "Created runtime animation {}.",
+            operation.path.as_deref().unwrap_or("<none>")
+        ),
+        data: json!({
+            "path": operation.path,
+            "attached": operation.attached,
+            "count": operation.count,
+            "elapsed_ms": response.elapsed_ms
+        }),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1224,6 +1507,151 @@ struct LightingTimeOfDayArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct BlueprintCreateActorArgs {
+    path: String,
+    #[serde(default = "default_blueprint_parent_class")]
+    parent_class: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BlueprintCompileArgs {
+    path: String,
+    #[serde(default)]
+    save: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct StaticMeshComponentArgs {
+    blueprint: String,
+    name: String,
+    mesh: String,
+    material: Option<String>,
+    #[serde(default)]
+    location: [f64; 3],
+    #[serde(default)]
+    rotation: [f64; 3],
+    #[serde(default = "default_scale")]
+    scale: [f64; 3],
+}
+
+impl StaticMeshComponentArgs {
+    fn into_spec(self) -> StaticMeshComponentSpec {
+        StaticMeshComponentSpec {
+            name: self.name,
+            mesh: self.mesh,
+            material: self.material,
+            transform: Transform {
+                location: self.location,
+                rotation: self.rotation,
+                scale: self.scale,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LightComponentArgs {
+    blueprint: String,
+    name: String,
+    #[serde(default = "default_light_kind")]
+    kind: String,
+    #[serde(default)]
+    location: [f64; 3],
+    #[serde(default)]
+    rotation: [f64; 3],
+    #[serde(default = "default_scale")]
+    scale: [f64; 3],
+    #[serde(default = "default_light_color")]
+    color: [f64; 4],
+    #[serde(default = "default_light_intensity")]
+    intensity: f64,
+    #[serde(default = "default_attenuation_radius")]
+    attenuation_radius: f64,
+    #[serde(default = "default_source_radius")]
+    source_radius: f64,
+    #[serde(default = "default_source_width")]
+    source_width: f64,
+    #[serde(default = "default_source_height")]
+    source_height: f64,
+}
+
+impl LightComponentArgs {
+    fn into_spec(self) -> LightComponentSpec {
+        LightComponentSpec {
+            name: self.name,
+            kind: self.kind,
+            transform: Transform {
+                location: self.location,
+                rotation: self.rotation,
+                scale: self.scale,
+            },
+            color: self.color,
+            intensity: self.intensity,
+            attenuation_radius: self.attenuation_radius,
+            source_radius: self.source_radius,
+            source_width: self.source_width,
+            source_height: self.source_height,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeAnimationArgs {
+    path: String,
+    target_component: Option<String>,
+    parameter_name: Option<String>,
+    #[serde(default = "default_led_color_a")]
+    color_a: [f64; 4],
+    #[serde(default = "default_led_color_b")]
+    color_b: [f64; 4],
+    #[serde(default)]
+    from_scalar: f64,
+    #[serde(default = "default_runtime_to_scalar")]
+    to_scalar: f64,
+    #[serde(default = "default_runtime_speed")]
+    speed: f64,
+    #[serde(default = "default_runtime_amplitude")]
+    amplitude: f64,
+    #[serde(default = "default_runtime_axis")]
+    axis: [f64; 3],
+    #[serde(default = "default_light_intensity")]
+    base_intensity: f64,
+    #[serde(default)]
+    phase_offset: f64,
+}
+
+impl RuntimeAnimationArgs {
+    fn into_spec(self, default_parameter: &str) -> RuntimeAnimationSpec {
+        RuntimeAnimationSpec {
+            path: self.path,
+            target_component: self.target_component,
+            parameter_name: self
+                .parameter_name
+                .unwrap_or_else(|| default_parameter.to_string()),
+            color_a: self.color_a,
+            color_b: self.color_b,
+            from_scalar: self.from_scalar,
+            to_scalar: self.to_scalar,
+            speed: self.speed,
+            amplitude: self.amplitude,
+            axis: self.axis,
+            base_intensity: self.base_intensity,
+            phase_offset: self.phase_offset,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RuntimeAttachAnimationArgs {
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    blueprint: Option<String>,
+    animations: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ScalarParameterArg {
     name: String,
     value: f64,
@@ -1389,4 +1817,32 @@ fn default_sun_intensity() -> f64 {
 
 fn default_sun_color() -> [f64; 4] {
     [1.0, 0.93, 0.82, 1.0]
+}
+
+fn default_blueprint_parent_class() -> String {
+    "Actor".to_string()
+}
+
+fn default_led_color_a() -> [f64; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_led_color_b() -> [f64; 4] {
+    [0.0, 0.85, 1.0, 1.0]
+}
+
+fn default_runtime_to_scalar() -> f64 {
+    10.0
+}
+
+fn default_runtime_speed() -> f64 {
+    1.0
+}
+
+fn default_runtime_amplitude() -> f64 {
+    100.0
+}
+
+fn default_runtime_axis() -> [f64; 3] {
+    [0.0, 0.0, 1.0]
 }

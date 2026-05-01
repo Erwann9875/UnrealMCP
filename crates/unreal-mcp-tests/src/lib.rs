@@ -4,10 +4,11 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use unreal_mcp_protocol::{
-    decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetOperation, BridgeStatus,
-    Command, CommandResult, LevelInfo, LevelList, LevelOperation, LightSummary, LightingOperation,
-    MaterialAppliedActor, MaterialApplyResult, MaterialOperation, MaterialParameterOperation,
-    ProceduralTextureOperation, ResponseEnvelope, SpawnedActor, Transform, WorldQueryResult,
+    decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetOperation,
+    BlueprintComponentOperation, BlueprintOperation, BridgeStatus, Command, CommandResult,
+    LevelInfo, LevelList, LevelOperation, LightSummary, LightingOperation, MaterialAppliedActor,
+    MaterialApplyResult, MaterialOperation, MaterialParameterOperation, ProceduralTextureOperation,
+    ResponseEnvelope, RuntimeAnimationOperation, SpawnedActor, Transform, WorldQueryResult,
 };
 
 pub struct FakeBridge {
@@ -98,6 +99,14 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "lighting.set_post_process".to_string(),
                     "lighting.bulk_set_lights".to_string(),
                     "lighting.set_time_of_day".to_string(),
+                    "blueprint.create_actor".to_string(),
+                    "blueprint.add_static_mesh_component".to_string(),
+                    "blueprint.add_light_component".to_string(),
+                    "blueprint.compile".to_string(),
+                    "runtime.create_led_animation".to_string(),
+                    "runtime.create_moving_light_animation".to_string(),
+                    "runtime.create_material_parameter_animation".to_string(),
+                    "runtime.attach_animation_to_actor".to_string(),
                 ],
             },
             Command::LevelCreate { path, open, save } => {
@@ -274,6 +283,62 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                 CommandResult::LightingOperation(LightingOperation {
                     changed: vec!["MCP_SunLight".to_string()],
                     count: 1,
+                })
+            }
+            Command::BlueprintCreateActor { path, .. } => {
+                CommandResult::BlueprintOperation(BlueprintOperation {
+                    path,
+                    created: true,
+                    compiled: false,
+                })
+            }
+            Command::BlueprintAddStaticMeshComponent {
+                blueprint,
+                component,
+            } => CommandResult::BlueprintComponentOperation(BlueprintComponentOperation {
+                blueprint,
+                components: vec![component.name],
+                count: 1,
+            }),
+            Command::BlueprintAddLightComponent {
+                blueprint,
+                component,
+            } => CommandResult::BlueprintComponentOperation(BlueprintComponentOperation {
+                blueprint,
+                components: vec![component.name],
+                count: 1,
+            }),
+            Command::BlueprintCompile { path, .. } => {
+                CommandResult::BlueprintOperation(BlueprintOperation {
+                    path,
+                    created: false,
+                    compiled: true,
+                })
+            }
+            Command::RuntimeCreateLedAnimation { spec }
+            | Command::RuntimeCreateMovingLightAnimation { spec }
+            | Command::RuntimeCreateMaterialParameterAnimation { spec } => {
+                CommandResult::RuntimeAnimationOperation(RuntimeAnimationOperation {
+                    path: Some(spec.path),
+                    attached: vec![],
+                    count: 0,
+                })
+            }
+            Command::RuntimeAttachAnimationToActor {
+                names, blueprint, ..
+            } => {
+                let mut attached = if names.is_empty() {
+                    vec!["MCP_Test_Cube".to_string()]
+                } else {
+                    names
+                };
+                if let Some(blueprint) = blueprint {
+                    attached.push(blueprint);
+                }
+                CommandResult::RuntimeAnimationOperation(RuntimeAnimationOperation {
+                    path: None,
+                    count: attached.len(),
+                    attached,
                 })
             }
         })

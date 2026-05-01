@@ -74,6 +74,14 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
             "lighting.set_post_process",
             "lighting.bulk_set_lights",
             "lighting.set_time_of_day",
+            "blueprint.create_actor",
+            "blueprint.add_static_mesh_component",
+            "blueprint.add_light_component",
+            "blueprint.compile",
+            "runtime.create_led_animation",
+            "runtime.create_moving_light_animation",
+            "runtime.create_material_parameter_animation",
+            "runtime.attach_animation_to_actor",
         ]
     );
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
@@ -147,6 +155,26 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     assert_eq!(
         light_schema["properties"]["kind"]["enum"],
         json!(["point", "rect", "spot"])
+    );
+    assert_eq!(
+        tool_by_name("blueprint.create_actor")["inputSchema"]["required"],
+        json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("blueprint.add_static_mesh_component")["inputSchema"]["required"],
+        json!(["blueprint", "name", "mesh"])
+    );
+    assert_eq!(
+        tool_by_name("blueprint.add_light_component")["inputSchema"]["required"],
+        json!(["blueprint", "name"])
+    );
+    assert_eq!(
+        tool_by_name("runtime.create_led_animation")["inputSchema"]["required"],
+        json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("runtime.attach_animation_to_actor")["inputSchema"]["required"],
+        json!(["animations"])
     );
 }
 
@@ -394,6 +422,127 @@ async fn stdio_tools_call_dispatches_lighting_bulk_set_lights() {
         .as_str()
         .expect("data text")
         .contains("MCP_StreetLight_001"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_blueprint_create_actor() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+            "name": "blueprint.create_actor",
+            "arguments": {
+                "path": "/Game/MCP/Blueprints/BP_LED_Tower"
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Created Blueprint"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("/Game/MCP/Blueprints/BP_LED_Tower"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_blueprint_add_light_component() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": {
+            "name": "blueprint.add_light_component",
+            "arguments": {
+                "blueprint": "/Game/MCP/Blueprints/BP_LED_Tower",
+                "name": "WindowGlow",
+                "kind": "rect",
+                "location": [0.0, -210.0, 500.0],
+                "source_width": 320.0,
+                "source_height": 160.0
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Updated 1 Blueprint component"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("WindowGlow"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_runtime_create_led_animation() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "tools/call",
+        "params": {
+            "name": "runtime.create_led_animation",
+            "arguments": {
+                "path": "/Game/MCP/Runtime/DA_LED_Pulse",
+                "target_component": "BuildingMesh",
+                "speed": 2.0
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Created runtime animation"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("/Game/MCP/Runtime/DA_LED_Pulse"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_runtime_attach_animation_to_actor() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "tools/call",
+        "params": {
+            "name": "runtime.attach_animation_to_actor",
+            "arguments": {
+                "tags": ["mcp.group:buildings"],
+                "blueprint": "/Game/MCP/Blueprints/BP_LED_Tower",
+                "animations": ["/Game/MCP/Runtime/DA_LED_Pulse"]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Attached runtime animation to 2 target"));
 }
 
 #[tokio::test]
