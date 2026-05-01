@@ -47,9 +47,7 @@ async fn handle_line(tools: &ConnectionTools, line: &str) -> Option<Value> {
         }
     };
 
-    let Some(id) = request.get("id").cloned() else {
-        return None;
-    };
+    let id = request.get("id").cloned()?;
 
     let Some(method) = request.get("method").and_then(Value::as_str) else {
         return Some(json_rpc_error(
