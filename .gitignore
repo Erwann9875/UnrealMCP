@@ -1,5 +1,6 @@
 .worktrees/
 /target/
+/target-codex/
 /.idea/
 /.vscode/
 *.user
