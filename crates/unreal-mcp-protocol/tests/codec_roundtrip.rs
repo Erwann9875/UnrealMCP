@@ -1,10 +1,11 @@
 use unreal_mcp_protocol::{
-    ActorQuery, ActorSpawnSpec, AssetOperation, Command, CommandResult, ErrorMode, IndexedError,
-    LevelInfo, LevelList, LevelOperation, LightSpec, LightSummary, LightingOperation,
-    MaterialAppliedActor, MaterialApplyResult, MaterialAssignment, MaterialOperation,
-    MaterialParameter, MaterialParameterOperation, ProceduralTextureOperation, ProtocolError,
-    RequestEnvelope, ResponseEnvelope, ResponseMode, SpawnedActor, TextureCreateSpec, Transform,
-    WorldQueryResult,
+    ActorQuery, ActorSpawnSpec, AssetOperation, BlueprintComponentOperation, BlueprintOperation,
+    Command, CommandResult, ErrorMode, IndexedError, LevelInfo, LevelList, LevelOperation,
+    LightComponentSpec, LightSpec, LightSummary, LightingOperation, MaterialAppliedActor,
+    MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
+    MaterialParameterOperation, ProceduralTextureOperation, ProtocolError, RequestEnvelope,
+    ResponseEnvelope, ResponseMode, RuntimeAnimationOperation, RuntimeAnimationSpec, SpawnedActor,
+    StaticMeshComponentSpec, TextureCreateSpec, Transform, WorldQueryResult,
 };
 
 #[test]
@@ -367,6 +368,163 @@ fn lighting_results_roundtrip_preserve_payloads() {
 
     let bytes = encode_msgpack_response(&response).expect("encode response");
     let decoded = decode_msgpack_response(&bytes).expect("decode response");
+
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn runtime_blueprint_requests_roundtrip_preserve_payloads() {
+    let request = RequestEnvelope::new(
+        59,
+        ResponseMode::Summary,
+        ErrorMode::Stop,
+        vec![
+            Command::BlueprintCreateActor {
+                path: "/Game/MCP/Blueprints/BP_LED_Tower".to_string(),
+                parent_class: "Actor".to_string(),
+            },
+            Command::BlueprintAddStaticMeshComponent {
+                blueprint: "/Game/MCP/Blueprints/BP_LED_Tower".to_string(),
+                component: StaticMeshComponentSpec {
+                    name: "BuildingMesh".to_string(),
+                    mesh: "/Engine/BasicShapes/Cube.Cube".to_string(),
+                    material: Some("/Game/MCP/Materials/MI_LED".to_string()),
+                    transform: Transform {
+                        location: [0.0, 0.0, 200.0],
+                        rotation: [0.0, 0.0, 0.0],
+                        scale: [4.0, 4.0, 8.0],
+                    },
+                },
+            },
+            Command::BlueprintAddLightComponent {
+                blueprint: "/Game/MCP/Blueprints/BP_LED_Tower".to_string(),
+                component: LightComponentSpec {
+                    name: "WindowGlow".to_string(),
+                    kind: "rect".to_string(),
+                    transform: Transform {
+                        location: [0.0, -210.0, 500.0],
+                        rotation: [0.0, 180.0, 0.0],
+                        scale: [1.0, 1.0, 1.0],
+                    },
+                    color: [0.0, 0.85, 1.0, 1.0],
+                    intensity: 8000.0,
+                    attenuation_radius: 1200.0,
+                    source_radius: 12.0,
+                    source_width: 320.0,
+                    source_height: 160.0,
+                },
+            },
+            Command::BlueprintCompile {
+                path: "/Game/MCP/Blueprints/BP_LED_Tower".to_string(),
+                save: false,
+            },
+        ],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn runtime_animation_requests_roundtrip_preserve_payloads() {
+    let led = RuntimeAnimationSpec {
+        path: "/Game/MCP/Runtime/DA_LED_Pulse".to_string(),
+        target_component: Some("BuildingMesh".to_string()),
+        parameter_name: "EmissiveColor".to_string(),
+        color_a: [0.0, 0.0, 0.0, 1.0],
+        color_b: [0.0, 0.85, 1.0, 1.0],
+        from_scalar: 0.0,
+        to_scalar: 10.0,
+        speed: 2.0,
+        amplitude: 100.0,
+        axis: [0.0, 0.0, 1.0],
+        base_intensity: 5000.0,
+        phase_offset: 0.25,
+    };
+    let moving_light = RuntimeAnimationSpec {
+        path: "/Game/MCP/Runtime/DA_WindowGlow_Move".to_string(),
+        target_component: Some("WindowGlow".to_string()),
+        parameter_name: "Intensity".to_string(),
+        color_a: [1.0, 0.82, 0.55, 1.0],
+        color_b: [0.0, 0.85, 1.0, 1.0],
+        from_scalar: 0.0,
+        to_scalar: 1.0,
+        speed: 1.5,
+        amplitude: 75.0,
+        axis: [0.0, 0.0, 1.0],
+        base_intensity: 8000.0,
+        phase_offset: 0.0,
+    };
+
+    let request = RequestEnvelope::new(
+        60,
+        ResponseMode::Summary,
+        ErrorMode::Stop,
+        vec![
+            Command::RuntimeCreateLedAnimation { spec: led },
+            Command::RuntimeCreateMovingLightAnimation { spec: moving_light },
+            Command::RuntimeCreateMaterialParameterAnimation {
+                spec: RuntimeAnimationSpec {
+                    path: "/Game/MCP/Runtime/DA_Material_Pulse".to_string(),
+                    target_component: None,
+                    parameter_name: "GlowAmount".to_string(),
+                    color_a: [0.0, 0.0, 0.0, 1.0],
+                    color_b: [1.0, 1.0, 1.0, 1.0],
+                    from_scalar: 0.0,
+                    to_scalar: 5.0,
+                    speed: 3.0,
+                    amplitude: 100.0,
+                    axis: [0.0, 0.0, 1.0],
+                    base_intensity: 5000.0,
+                    phase_offset: 0.0,
+                },
+            },
+            Command::RuntimeAttachAnimationToActor {
+                names: vec!["MCP_LED_Tower_001".to_string()],
+                tags: vec!["mcp.group:buildings".to_string()],
+                blueprint: Some("/Game/MCP/Blueprints/BP_LED_Tower".to_string()),
+                animations: vec![
+                    "/Game/MCP/Runtime/DA_LED_Pulse".to_string(),
+                    "/Game/MCP/Runtime/DA_WindowGlow_Move".to_string(),
+                ],
+            },
+        ],
+    );
+
+    let bytes = encode_msgpack_request(&request).expect("encode request");
+    let decoded = decode_msgpack_request(&bytes).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn runtime_blueprint_results_roundtrip_preserve_payloads() {
+    let response = ResponseEnvelope::success(
+        61,
+        11,
+        vec![
+            CommandResult::BlueprintOperation(BlueprintOperation {
+                path: "/Game/MCP/Blueprints/BP_LED_Tower".to_string(),
+                created: true,
+                compiled: false,
+            }),
+            CommandResult::BlueprintComponentOperation(BlueprintComponentOperation {
+                blueprint: "/Game/MCP/Blueprints/BP_LED_Tower".to_string(),
+                components: vec!["BuildingMesh".to_string(), "WindowGlow".to_string()],
+                count: 2,
+            }),
+            CommandResult::RuntimeAnimationOperation(RuntimeAnimationOperation {
+                path: Some("/Game/MCP/Runtime/DA_LED_Pulse".to_string()),
+                attached: vec!["MCP_LED_Tower_001".to_string()],
+                count: 1,
+            }),
+        ],
+    );
+
+    let text = encode_json_response(&response).expect("encode response");
+    let decoded = decode_json_response(&text).expect("decode response");
 
     assert_eq!(decoded, response);
 }

@@ -103,6 +103,37 @@ pub enum Command {
         sun_intensity: f64,
         sun_color: [f64; 4],
     },
+    BlueprintCreateActor {
+        path: String,
+        parent_class: String,
+    },
+    BlueprintAddStaticMeshComponent {
+        blueprint: String,
+        component: StaticMeshComponentSpec,
+    },
+    BlueprintAddLightComponent {
+        blueprint: String,
+        component: LightComponentSpec,
+    },
+    BlueprintCompile {
+        path: String,
+        save: bool,
+    },
+    RuntimeCreateLedAnimation {
+        spec: RuntimeAnimationSpec,
+    },
+    RuntimeCreateMovingLightAnimation {
+        spec: RuntimeAnimationSpec,
+    },
+    RuntimeCreateMaterialParameterAnimation {
+        spec: RuntimeAnimationSpec,
+    },
+    RuntimeAttachAnimationToActor {
+        names: Vec<String>,
+        tags: Vec<String>,
+        blueprint: Option<String>,
+        animations: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,6 +278,43 @@ pub struct LightSpec {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StaticMeshComponentSpec {
+    pub name: String,
+    pub mesh: String,
+    pub material: Option<String>,
+    pub transform: Transform,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LightComponentSpec {
+    pub name: String,
+    pub kind: String,
+    pub transform: Transform,
+    pub color: [f64; 4],
+    pub intensity: f64,
+    pub attenuation_radius: f64,
+    pub source_radius: f64,
+    pub source_width: f64,
+    pub source_height: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeAnimationSpec {
+    pub path: String,
+    pub target_component: Option<String>,
+    pub parameter_name: String,
+    pub color_a: [f64; 4],
+    pub color_b: [f64; 4],
+    pub from_scalar: f64,
+    pub to_scalar: f64,
+    pub speed: f64,
+    pub amplitude: f64,
+    pub axis: [f64; 3],
+    pub base_intensity: f64,
+    pub phase_offset: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetOperation {
     pub path: String,
@@ -303,6 +371,27 @@ pub struct LightSummary {
     pub kind: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlueprintOperation {
+    pub path: String,
+    pub created: bool,
+    pub compiled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlueprintComponentOperation {
+    pub blueprint: String,
+    pub components: Vec<String>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeAnimationOperation {
+    pub path: Option<String>,
+    pub attached: Vec<String>,
+    pub count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "data")]
 pub enum CommandResult {
@@ -338,4 +427,7 @@ pub enum CommandResult {
         lights: Vec<LightSummary>,
         count: usize,
     },
+    BlueprintOperation(BlueprintOperation),
+    BlueprintComponentOperation(BlueprintComponentOperation),
+    RuntimeAnimationOperation(RuntimeAnimationOperation),
 }
