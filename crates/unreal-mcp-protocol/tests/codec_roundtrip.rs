@@ -1,6 +1,7 @@
 use unreal_mcp_protocol::{
-    Command, CommandResult, ErrorMode, IndexedError, ProtocolError, RequestEnvelope,
-    ResponseEnvelope, ResponseMode,
+    ActorQuery, ActorSpawnSpec, Command, CommandResult, ErrorMode, IndexedError, LevelInfo,
+    LevelList, LevelOperation, ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode,
+    SpawnedActor, Transform, WorldQueryResult,
 };
 
 #[test]
@@ -69,6 +70,112 @@ fn json_debug_request_roundtrip_preserves_envelope() {
     let decoded = decode_json_request(&text).expect("decode request");
 
     assert_eq!(decoded, request);
+}
+
+#[test]
+fn level_create_request_roundtrip_preserves_payload() {
+    let request = RequestEnvelope::new(
+        50,
+        ResponseMode::Summary,
+        ErrorMode::Stop,
+        vec![Command::LevelCreate {
+            path: "/Game/MCP/Generated/L_Test".to_string(),
+            open: true,
+            save: false,
+        }],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn world_bulk_spawn_request_roundtrip_preserves_payload() {
+    let request = RequestEnvelope::new(
+        51,
+        ResponseMode::Handles,
+        ErrorMode::Continue,
+        vec![Command::WorldBulkSpawn {
+            actors: vec![ActorSpawnSpec {
+                name: "MCP_Test_Cube".to_string(),
+                mesh: "/Engine/BasicShapes/Cube.Cube".to_string(),
+                transform: Transform {
+                    location: [100.0, 200.0, 300.0],
+                    rotation: [0.0, 45.0, 0.0],
+                    scale: [2.0, 2.0, 1.0],
+                },
+                scene: Some("test_scene".to_string()),
+                group: Some("buildings".to_string()),
+            }],
+        }],
+    );
+
+    let bytes = encode_msgpack_request(&request).expect("encode request");
+    let decoded = decode_msgpack_request(&bytes).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn world_query_response_roundtrip_preserves_payload() {
+    let response = ResponseEnvelope::success(
+        52,
+        4,
+        vec![CommandResult::WorldQuery(WorldQueryResult {
+            actors: vec![ActorQuery {
+                name: "MCP_Test_Cube".to_string(),
+                path: "PersistentLevel.MCP_Test_Cube".to_string(),
+                class_name: "StaticMeshActor".to_string(),
+                transform: Transform {
+                    location: [0.0, 0.0, 50.0],
+                    rotation: [0.0, 0.0, 0.0],
+                    scale: [1.0, 1.0, 1.0],
+                },
+                tags: vec!["mcp.generated".to_string()],
+            }],
+            total_count: 1,
+        })],
+    );
+
+    let text = encode_json_response(&response).expect("encode response");
+    let decoded = decode_json_response(&text).expect("decode response");
+
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn level_and_spawn_results_roundtrip() {
+    let response = ResponseEnvelope::success(
+        53,
+        5,
+        vec![
+            CommandResult::LevelList(LevelList {
+                levels: vec![LevelInfo {
+                    path: "/Game/MCP/Generated/L_Test".to_string(),
+                    name: "L_Test".to_string(),
+                }],
+            }),
+            CommandResult::LevelOperation(LevelOperation {
+                path: "/Game/MCP/Generated/L_Test".to_string(),
+                opened: true,
+                saved: true,
+            }),
+            CommandResult::WorldBulkSpawn {
+                spawned: vec![SpawnedActor {
+                    name: "MCP_Test_Cube".to_string(),
+                    path: "PersistentLevel.MCP_Test_Cube".to_string(),
+                }],
+                count: 1,
+            },
+        ],
+    );
+
+    let bytes = encode_msgpack_response(&response).expect("encode response");
+    let decoded = decode_msgpack_response(&bytes).expect("decode response");
+
+    assert_eq!(decoded, response);
 }
 
 #[test]

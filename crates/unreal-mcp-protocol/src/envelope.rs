@@ -20,7 +20,7 @@ pub enum ErrorMode {
     Continue,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestEnvelope {
     pub protocol_version: u16,
     pub request_id: u64,
@@ -54,7 +54,7 @@ pub struct IndexedError {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseEnvelope {
     pub protocol_version: u16,
     pub request_id: u64,
