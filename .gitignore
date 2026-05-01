@@ -12,3 +12,6 @@ DerivedDataCache/
 Intermediate/
 Saved/
 .vs/
+
+# Local Unreal test project
+/MCPTester/
