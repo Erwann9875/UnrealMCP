@@ -759,12 +759,20 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
                 continue;
             }
 
+            TSharedPtr<FJsonObject> TransformSpec = *ActorSpec;
+            const TSharedPtr<FJsonObject>* NestedTransform = nullptr;
+            if ((*ActorSpec)->TryGetObjectField(TEXT("transform"), NestedTransform) && NestedTransform != nullptr &&
+                NestedTransform->IsValid())
+            {
+                TransformSpec = *NestedTransform;
+            }
+
             FVector Location = FVector::ZeroVector;
             FVector Scale = FVector(1.0, 1.0, 1.0);
             FRotator Rotation = FRotator::ZeroRotator;
-            if (!ReadVectorField(*ActorSpec, TEXT("location"), FVector::ZeroVector, Location) ||
-                !ReadRotatorField(*ActorSpec, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
-                !ReadVectorField(*ActorSpec, TEXT("scale"), FVector(1.0, 1.0, 1.0), Scale))
+            if (!ReadVectorField(TransformSpec, TEXT("location"), FVector::ZeroVector, Location) ||
+                !ReadRotatorField(TransformSpec, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
+                !ReadVectorField(TransformSpec, TEXT("scale"), FVector(1.0, 1.0, 1.0), Scale))
             {
                 continue;
             }
