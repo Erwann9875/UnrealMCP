@@ -4,9 +4,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use unreal_mcp_protocol::{
-    decode_msgpack_request, encode_msgpack_response, ActorQuery, BridgeStatus, Command,
-    CommandResult, LevelInfo, LevelList, LevelOperation, ResponseEnvelope, SpawnedActor, Transform,
-    WorldQueryResult,
+    decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetOperation, BridgeStatus,
+    Command, CommandResult, LevelInfo, LevelList, LevelOperation, MaterialAppliedActor,
+    MaterialApplyResult, MaterialOperation, MaterialParameterOperation, ProceduralTextureOperation,
+    ResponseEnvelope, SpawnedActor, Transform, WorldQueryResult,
 };
 
 pub struct FakeBridge {
@@ -84,6 +85,13 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "world.bulk_delete".to_string(),
                     "world.query".to_string(),
                     "world.snapshot".to_string(),
+                    "asset.create_folder".to_string(),
+                    "material.create".to_string(),
+                    "material.create_instance".to_string(),
+                    "material.create_procedural_texture".to_string(),
+                    "material.set_parameters".to_string(),
+                    "material.bulk_apply".to_string(),
+                    "world.bulk_set_materials".to_string(),
                 ],
             },
             Command::LevelCreate { path, open, save } => {
@@ -153,6 +161,69 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                 path: path.unwrap_or_else(|| "Saved/UnrealMCP/snapshots/world.json".to_string()),
                 total_count: 1,
             },
+            Command::AssetCreateFolder { path } => CommandResult::AssetOperation(AssetOperation {
+                path,
+                created: true,
+            }),
+            Command::MaterialCreate { path, .. } => {
+                CommandResult::MaterialOperation(MaterialOperation {
+                    path,
+                    parent: None,
+                    created: true,
+                })
+            }
+            Command::MaterialCreateInstance { path, parent, .. } => {
+                CommandResult::MaterialOperation(MaterialOperation {
+                    path,
+                    parent: Some(parent),
+                    created: true,
+                })
+            }
+            Command::MaterialCreateProceduralTexture { spec } => {
+                CommandResult::ProceduralTextureOperation(ProceduralTextureOperation {
+                    path: spec.path,
+                    width: spec.width,
+                    height: spec.height,
+                    created: true,
+                })
+            }
+            Command::MaterialSetParameters {
+                path,
+                scalar_parameters,
+                vector_parameters,
+                texture_parameters,
+            } => CommandResult::MaterialParameterOperation(MaterialParameterOperation {
+                path,
+                scalar_count: scalar_parameters.len(),
+                vector_count: vector_parameters.len(),
+                texture_count: texture_parameters.len(),
+            }),
+            Command::MaterialBulkApply { assignments } => {
+                let applied = assignments
+                    .into_iter()
+                    .map(|assignment| MaterialAppliedActor {
+                        name: "MCP_Test_Cube".to_string(),
+                        path: "PersistentLevel.MCP_Test_Cube".to_string(),
+                        material: assignment.material,
+                        slot: assignment.slot,
+                    })
+                    .collect::<Vec<_>>();
+                CommandResult::MaterialApply(MaterialApplyResult {
+                    count: applied.len(),
+                    applied,
+                })
+            }
+            Command::WorldBulkSetMaterials { material, slot, .. } => {
+                CommandResult::MaterialApply(MaterialApplyResult {
+                    applied: vec![MaterialAppliedActor {
+                        name: "MCP_Test_Cube".to_string(),
+                        path: "PersistentLevel.MCP_Test_Cube".to_string(),
+                        material,
+                        slot,
+                    }],
+                    count: 1,
+                })
+            }
         })
         .collect();
 

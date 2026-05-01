@@ -61,6 +61,13 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
             "world.bulk_delete",
             "world.query",
             "world.snapshot",
+            "asset.create_folder",
+            "material.create",
+            "material.create_instance",
+            "material.create_procedural_texture",
+            "material.set_parameters",
+            "material.bulk_apply",
+            "world.bulk_set_materials",
         ]
     );
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
@@ -104,6 +111,22 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     assert_eq!(actor_schema["properties"]["location"]["maxItems"], 3);
     assert!(tool_by_name("world.bulk_delete")["inputSchema"]["properties"]["names"].is_object());
     assert!(tool_by_name("world.bulk_delete")["inputSchema"]["properties"]["tags"].is_object());
+    assert_eq!(
+        tool_by_name("asset.create_folder")["inputSchema"]["required"],
+        json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("material.create")["inputSchema"]["required"],
+        json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("material.bulk_apply")["inputSchema"]["required"],
+        json!(["assignments"])
+    );
+    assert_eq!(
+        tool_by_name("world.bulk_set_materials")["inputSchema"]["required"],
+        json!(["material"])
+    );
 }
 
 #[tokio::test]
@@ -219,6 +242,68 @@ async fn stdio_tools_call_dispatches_world_query() {
         .as_str()
         .expect("summary text")
         .contains("1 actor"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_material_create() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "material.create",
+            "arguments": {
+                "path": "/Game/MCP/Materials/M_TestConcrete",
+                "base_color": [0.45, 0.45, 0.42, 1.0],
+                "roughness": 0.8
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Created material"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("/Game/MCP/Materials/M_TestConcrete"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_material_bulk_apply() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+            "name": "material.bulk_apply",
+            "arguments": {
+                "assignments": [
+                    {
+                        "material": "/Game/MCP/Materials/M_TestConcrete",
+                        "tags": ["mcp.group:buildings"],
+                        "slot": 0
+                    }
+                ]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Applied material to 1 actor"));
 }
 
 #[tokio::test]

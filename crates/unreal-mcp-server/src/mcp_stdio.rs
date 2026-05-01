@@ -155,6 +155,41 @@ fn tools_list_response(id: Value) -> Value {
                     "world.snapshot",
                     "Write a compact world snapshot to disk.",
                     world_snapshot_schema()
+                ),
+                tool_definition(
+                    "asset.create_folder",
+                    "Create a Content Browser folder.",
+                    path_only_schema()
+                ),
+                tool_definition(
+                    "material.create",
+                    "Create a simple Unreal material asset.",
+                    material_create_schema()
+                ),
+                tool_definition(
+                    "material.create_instance",
+                    "Create a material instance asset.",
+                    material_instance_schema()
+                ),
+                tool_definition(
+                    "material.create_procedural_texture",
+                    "Create a small procedural texture asset.",
+                    texture_create_schema()
+                ),
+                tool_definition(
+                    "material.set_parameters",
+                    "Set material or material instance parameters.",
+                    material_set_parameters_schema()
+                ),
+                tool_definition(
+                    "material.bulk_apply",
+                    "Apply materials to actors by names or tags in bulk.",
+                    material_bulk_apply_schema()
+                ),
+                tool_definition(
+                    "world.bulk_set_materials",
+                    "Set one material on actors selected by names or tags.",
+                    world_bulk_set_materials_schema()
                 )
             ]
         }
@@ -227,6 +262,15 @@ fn vec3_schema() -> Value {
     })
 }
 
+fn vec4_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "number" },
+        "minItems": 4,
+        "maxItems": 4
+    })
+}
+
 fn world_bulk_spawn_schema() -> Value {
     json!({
         "type": "object",
@@ -250,6 +294,169 @@ fn world_bulk_spawn_schema() -> Value {
             }
         },
         "required": ["actors"],
+        "additionalProperties": false
+    })
+}
+
+fn path_only_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn scalar_parameter_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "value": { "type": "number" }
+            },
+            "required": ["name", "value"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn vector_parameter_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "value": vec4_schema()
+            },
+            "required": ["name", "value"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn texture_parameter_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "value": { "type": "string" }
+            },
+            "required": ["name", "value"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn material_create_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "base_color": vec4_schema(),
+            "metallic": { "type": "number" },
+            "roughness": { "type": "number" },
+            "specular": { "type": "number" },
+            "emissive_color": vec4_schema()
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn material_instance_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "parent": { "type": "string" },
+            "scalar_parameters": scalar_parameter_schema(),
+            "vector_parameters": vector_parameter_schema(),
+            "texture_parameters": texture_parameter_schema()
+        },
+        "required": ["path", "parent"],
+        "additionalProperties": false
+    })
+}
+
+fn texture_create_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "pattern": {
+                "type": "string",
+                "enum": ["solid", "checker"]
+            },
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 },
+            "color_a": vec4_schema(),
+            "color_b": vec4_schema(),
+            "checker_size": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn material_set_parameters_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "scalar_parameters": scalar_parameter_schema(),
+            "vector_parameters": vector_parameter_schema(),
+            "texture_parameters": texture_parameter_schema()
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn material_assignment_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "material": { "type": "string" },
+            "names": string_array_schema(),
+            "tags": string_array_schema(),
+            "slot": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["material"],
+        "additionalProperties": false
+    })
+}
+
+fn material_bulk_apply_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "assignments": {
+                "type": "array",
+                "items": material_assignment_schema()
+            }
+        },
+        "required": ["assignments"],
+        "additionalProperties": false
+    })
+}
+
+fn world_bulk_set_materials_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "names": string_array_schema(),
+            "tags": string_array_schema(),
+            "material": { "type": "string" },
+            "slot": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["material"],
         "additionalProperties": false
     })
 }
@@ -359,6 +566,15 @@ async fn call_tool(
         "world.bulk_delete" => tools.world_bulk_delete(arguments).await,
         "world.query" => tools.world_query(arguments).await,
         "world.snapshot" => tools.world_snapshot(arguments).await,
+        "asset.create_folder" => tools.asset_create_folder(arguments).await,
+        "material.create" => tools.material_create(arguments).await,
+        "material.create_instance" => tools.material_create_instance(arguments).await,
+        "material.create_procedural_texture" => {
+            tools.material_create_procedural_texture(arguments).await
+        }
+        "material.set_parameters" => tools.material_set_parameters(arguments).await,
+        "material.bulk_apply" => tools.material_bulk_apply(arguments).await,
+        "world.bulk_set_materials" => tools.world_bulk_set_materials(arguments).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }
