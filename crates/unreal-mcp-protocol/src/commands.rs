@@ -495,6 +495,12 @@ pub struct StaticMeshOperation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaticMeshOperationResult {
+    pub meshes: Vec<StaticMeshOperation>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaterialOperation {
     pub path: String,
     pub parent: Option<String>,
@@ -617,7 +623,7 @@ pub enum CommandResult {
     AssetImport(AssetImportResult),
     AssetValidation(AssetValidationResult),
     GeneratedMesh(GeneratedMeshOperation),
-    StaticMeshOperation(StaticMeshOperation),
+    StaticMeshOperation(StaticMeshOperationResult),
     MaterialOperation(MaterialOperation),
     ProceduralTextureOperation(ProceduralTextureOperation),
     MaterialParameterOperation(MaterialParameterOperation),

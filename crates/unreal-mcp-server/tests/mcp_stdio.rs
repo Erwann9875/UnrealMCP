@@ -62,6 +62,13 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
             "world.query",
             "world.snapshot",
             "asset.create_folder",
+            "asset.import_texture",
+            "asset.import_static_mesh",
+            "asset.bulk_import",
+            "asset.validate",
+            "mesh.create_building",
+            "mesh.create_sign",
+            "static_mesh.set_collision",
             "material.create",
             "material.create_instance",
             "material.create_procedural_texture",
@@ -132,6 +139,40 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     assert_eq!(
         tool_by_name("asset.create_folder")["inputSchema"]["required"],
         json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("asset.import_texture")["inputSchema"]["required"],
+        json!(["source_file", "destination_path"])
+    );
+    assert_eq!(
+        tool_by_name("asset.import_static_mesh")["inputSchema"]["required"],
+        json!(["source_file", "destination_path"])
+    );
+    assert_eq!(
+        tool_by_name("asset.bulk_import")["inputSchema"]["required"],
+        json!(["items"])
+    );
+    let import_item_schema =
+        &tool_by_name("asset.bulk_import")["inputSchema"]["properties"]["items"]["items"];
+    assert_eq!(
+        import_item_schema["required"],
+        json!(["kind", "source_file", "destination_path"])
+    );
+    assert_eq!(
+        tool_by_name("asset.validate")["inputSchema"]["required"],
+        json!(["paths"])
+    );
+    assert_eq!(
+        tool_by_name("mesh.create_building")["inputSchema"]["required"],
+        json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("mesh.create_sign")["inputSchema"]["required"],
+        json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("static_mesh.set_collision")["inputSchema"]["required"],
+        json!(["paths"])
     );
     assert_eq!(
         tool_by_name("material.create")["inputSchema"]["required"],
@@ -342,6 +383,180 @@ async fn stdio_tools_call_dispatches_material_create() {
         .as_str()
         .expect("data text")
         .contains("/Game/MCP/Materials/M_TestConcrete"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_asset_import_texture() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 30,
+        "method": "tools/call",
+        "params": {
+            "name": "asset.import_texture",
+            "arguments": {
+                "source_file": "C:/Temp/mcp_texture.png",
+                "destination_path": "/Game/MCP/Assets/T_Test",
+                "replace_existing": true,
+                "srgb": true
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Imported 1 asset"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("/Game/MCP/Assets/T_Test"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_asset_bulk_import_and_validate() {
+    let import_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 31,
+        "method": "tools/call",
+        "params": {
+            "name": "asset.bulk_import",
+            "arguments": {
+                "items": [
+                    {
+                        "kind": "texture",
+                        "source_file": "C:/Temp/a.png",
+                        "destination_path": "/Game/MCP/Assets/T_A"
+                    },
+                    {
+                        "kind": "static_mesh",
+                        "source_file": "C:/Temp/a.fbx",
+                        "destination_path": "/Game/MCP/Assets/SM_A",
+                        "generate_collision": true
+                    }
+                ]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(import_response["result"]["isError"], false);
+    let import_content = import_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(import_content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Imported 2 asset"));
+
+    let validate_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 32,
+        "method": "tools/call",
+        "params": {
+            "name": "asset.validate",
+            "arguments": {
+                "paths": [
+                    "/Game/MCP/Assets/T_A",
+                    "/Game/MCP/Assets/SM_A"
+                ]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(validate_response["result"]["isError"], false);
+    let validate_content = validate_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(validate_content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Validated 2 asset"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_generated_mesh_and_collision_tools() {
+    let building_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 33,
+        "method": "tools/call",
+        "params": {
+            "name": "mesh.create_building",
+            "arguments": {
+                "path": "/Game/MCP/Meshes/SM_TestBuilding",
+                "width": 800.0,
+                "depth": 600.0,
+                "height": 2400.0,
+                "floors": 12
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(building_response["result"]["isError"], false);
+    let building_content = building_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(building_content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Created generated mesh"));
+
+    let sign_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 34,
+        "method": "tools/call",
+        "params": {
+            "name": "mesh.create_sign",
+            "arguments": {
+                "path": "/Game/MCP/Meshes/SM_HollywoodSignPanel",
+                "width": 900.0,
+                "height": 240.0,
+                "depth": 30.0,
+                "text": "HOLLYWOOD"
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(sign_response["result"]["isError"], false);
+    let sign_content = sign_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(sign_content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Created generated mesh"));
+
+    let collision_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 35,
+        "method": "tools/call",
+        "params": {
+            "name": "static_mesh.set_collision",
+            "arguments": {
+                "paths": ["/Game/MCP/Meshes/SM_TestBuilding"],
+                "collision_trace": "use_simple_as_complex",
+                "simple_collision": true,
+                "rebuild": true
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(collision_response["result"]["isError"], false);
+    let collision_content = collision_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(collision_content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Updated collision for 1 static mesh"));
 }
 
 #[tokio::test]

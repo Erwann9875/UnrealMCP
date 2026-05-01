@@ -3,14 +3,16 @@ use serde_json::json;
 use anyhow::{bail, ensure};
 use serde::Deserialize;
 use unreal_mcp_protocol::{
-    ActorSpawnSpec, AssetOperation, BlueprintComponentOperation, BlueprintOperation, BridgeStatus,
-    Command, CommandResult, ErrorMode, LandscapeCreateSpec, LandscapeHeightPatch,
-    LandscapeLayerPaint, LandscapeOperation, LevelOperation, LightComponentSpec, LightSpec,
-    LightingOperation, MaterialApplyResult, MaterialAssignment, MaterialOperation,
-    MaterialParameter, MaterialParameterOperation, PlacementSnapResult, PlacementSnapSpec,
-    ProceduralTextureOperation, RequestEnvelope, ResponseEnvelope, ResponseMode,
-    RuntimeAnimationOperation, RuntimeAnimationSpec, StaticMeshComponentSpec, TextureCreateSpec,
-    Transform,
+    ActorSpawnSpec, AssetImportItem, AssetImportResult, AssetImportSpec, AssetOperation,
+    AssetValidateSpec, AssetValidationResult, BlueprintComponentOperation, BlueprintOperation,
+    BridgeStatus, Command, CommandResult, ErrorMode, GeneratedBuildingSpec, GeneratedMeshOperation,
+    GeneratedSignSpec, LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint,
+    LandscapeOperation, LevelOperation, LightComponentSpec, LightSpec, LightingOperation,
+    MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
+    MaterialParameterOperation, PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation,
+    RequestEnvelope, ResponseEnvelope, ResponseMode, RuntimeAnimationOperation,
+    RuntimeAnimationSpec, StaticMeshCollisionSpec, StaticMeshComponentSpec,
+    StaticMeshOperationResult, TextureCreateSpec, Transform,
 };
 
 use crate::BridgeClient;
@@ -356,6 +358,168 @@ impl ConnectionTools {
             data: json!({
                 "path": operation.path,
                 "created": operation.created,
+                "elapsed_ms": response.elapsed_ms
+            }),
+        })
+    }
+
+    pub async fn asset_import_texture(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: AssetImportArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "asset.import_texture",
+                Command::AssetImportTexture {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_asset_import("asset.import_texture", &response)?;
+        Ok(asset_import_response(
+            "asset.import_texture",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn asset_import_static_mesh(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: AssetImportArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "asset.import_static_mesh",
+                Command::AssetImportStaticMesh {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_asset_import("asset.import_static_mesh", &response)?;
+        Ok(asset_import_response(
+            "asset.import_static_mesh",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn asset_bulk_import(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: AssetBulkImportArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "asset.bulk_import",
+                Command::AssetBulkImport {
+                    items: args
+                        .items
+                        .into_iter()
+                        .map(AssetImportItemArgs::into_item)
+                        .collect(),
+                },
+            )
+            .await?;
+        let result = expect_asset_import("asset.bulk_import", &response)?;
+        Ok(asset_import_response(
+            "asset.bulk_import",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn asset_validate(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: AssetValidateArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "asset.validate",
+                Command::AssetValidate {
+                    spec: AssetValidateSpec { paths: args.paths },
+                },
+            )
+            .await?;
+        let result = expect_asset_validation("asset.validate", &response)?;
+        Ok(ToolResponse {
+            tool_name: "asset.validate",
+            summary: format!("Validated {} asset(s).", result.count),
+            data: json!({
+                "count": result.count,
+                "assets": result.assets,
+                "elapsed_ms": response.elapsed_ms
+            }),
+        })
+    }
+
+    pub async fn mesh_create_building(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GeneratedBuildingArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "mesh.create_building",
+                Command::MeshCreateBuilding {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let operation = expect_generated_mesh("mesh.create_building", &response)?;
+        Ok(generated_mesh_response(
+            "mesh.create_building",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn mesh_create_sign(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GeneratedSignArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "mesh.create_sign",
+                Command::MeshCreateSign {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let operation = expect_generated_mesh("mesh.create_sign", &response)?;
+        Ok(generated_mesh_response(
+            "mesh.create_sign",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn static_mesh_set_collision(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: StaticMeshCollisionArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "static_mesh.set_collision",
+                Command::StaticMeshSetCollision {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_static_mesh_operation("static_mesh.set_collision", &response)?;
+        Ok(ToolResponse {
+            tool_name: "static_mesh.set_collision",
+            summary: format!(
+                "Updated collision for {} static mesh asset(s).",
+                result.count
+            ),
+            data: json!({
+                "count": result.count,
+                "meshes": result.meshes,
                 "elapsed_ms": response.elapsed_ms
             }),
         })
@@ -1051,6 +1215,74 @@ fn expect_asset_operation(
     }
 }
 
+fn expect_asset_import(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<AssetImportResult> {
+    match response.results.as_slice() {
+        [CommandResult::AssetImport(result)] => Ok(result.clone()),
+        [] => bail!("unexpected {command_name} response: missing asset import result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected asset import result, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one asset import result, got {} results",
+            results.len()
+        ),
+    }
+}
+
+fn expect_asset_validation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<AssetValidationResult> {
+    match response.results.as_slice() {
+        [CommandResult::AssetValidation(result)] => Ok(result.clone()),
+        [] => bail!("unexpected {command_name} response: missing asset validation result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected asset validation result, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one asset validation result, got {} results",
+            results.len()
+        ),
+    }
+}
+
+fn expect_generated_mesh(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<GeneratedMeshOperation> {
+    match response.results.as_slice() {
+        [CommandResult::GeneratedMesh(operation)] => Ok(operation.clone()),
+        [] => bail!("unexpected {command_name} response: missing generated mesh result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected generated mesh result, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one generated mesh result, got {} results",
+            results.len()
+        ),
+    }
+}
+
+fn expect_static_mesh_operation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<StaticMeshOperationResult> {
+    match response.results.as_slice() {
+        [CommandResult::StaticMeshOperation(result)] => Ok(result.clone()),
+        [] => bail!("unexpected {command_name} response: missing static mesh operation result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected static mesh operation result, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one static mesh operation result, got {} results",
+            results.len()
+        ),
+    }
+}
+
 fn expect_material_operation(
     command_name: &str,
     response: &ResponseEnvelope,
@@ -1218,6 +1450,40 @@ fn expect_placement_snap(
             "unexpected {command_name} response: expected exactly one placement snap result, got {} results",
             results.len()
         ),
+    }
+}
+
+fn asset_import_response(
+    tool_name: &'static str,
+    elapsed_ms: u32,
+    result: AssetImportResult,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary: format!("Imported {} asset(s).", result.count),
+        data: json!({
+            "count": result.count,
+            "assets": result.assets,
+            "elapsed_ms": elapsed_ms
+        }),
+    }
+}
+
+fn generated_mesh_response(
+    tool_name: &'static str,
+    elapsed_ms: u32,
+    operation: GeneratedMeshOperation,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary: format!("Created generated mesh {}.", operation.path),
+        data: json!({
+            "path": operation.path,
+            "created": operation.created,
+            "vertex_count": operation.vertex_count,
+            "triangle_count": operation.triangle_count,
+            "elapsed_ms": elapsed_ms
+        }),
     }
 }
 
@@ -1447,6 +1713,148 @@ struct WorldSnapshotArgs {
 #[derive(Debug, Deserialize)]
 struct AssetCreateFolderArgs {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssetImportArgs {
+    source_file: String,
+    destination_path: String,
+    #[serde(default)]
+    replace_existing: bool,
+    #[serde(default)]
+    save: bool,
+    srgb: Option<bool>,
+    generate_collision: Option<bool>,
+}
+
+impl AssetImportArgs {
+    fn into_spec(self) -> AssetImportSpec {
+        AssetImportSpec {
+            source_file: self.source_file,
+            destination_path: self.destination_path,
+            replace_existing: self.replace_existing,
+            save: self.save,
+            srgb: self.srgb,
+            generate_collision: self.generate_collision,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AssetBulkImportArgs {
+    items: Vec<AssetImportItemArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssetImportItemArgs {
+    kind: String,
+    source_file: String,
+    destination_path: String,
+    #[serde(default)]
+    replace_existing: bool,
+    #[serde(default)]
+    save: bool,
+    srgb: Option<bool>,
+    generate_collision: Option<bool>,
+}
+
+impl AssetImportItemArgs {
+    fn into_item(self) -> AssetImportItem {
+        AssetImportItem {
+            kind: self.kind,
+            source_file: self.source_file,
+            destination_path: self.destination_path,
+            replace_existing: self.replace_existing,
+            save: self.save,
+            srgb: self.srgb,
+            generate_collision: self.generate_collision,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AssetValidateArgs {
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedBuildingArgs {
+    path: String,
+    #[serde(default = "default_building_width")]
+    width: f64,
+    #[serde(default = "default_building_depth")]
+    depth: f64,
+    #[serde(default = "default_building_height")]
+    height: f64,
+    #[serde(default = "default_building_floors")]
+    floors: u32,
+    window_rows: Option<u32>,
+    #[serde(default = "default_building_window_columns")]
+    window_columns: u32,
+    material: Option<String>,
+}
+
+impl GeneratedBuildingArgs {
+    fn into_spec(self) -> GeneratedBuildingSpec {
+        GeneratedBuildingSpec {
+            path: self.path,
+            width: self.width,
+            depth: self.depth,
+            height: self.height,
+            floors: self.floors,
+            window_rows: self.window_rows.unwrap_or(self.floors),
+            window_columns: self.window_columns,
+            material: self.material,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedSignArgs {
+    path: String,
+    #[serde(default = "default_sign_width")]
+    width: f64,
+    #[serde(default = "default_sign_height")]
+    height: f64,
+    #[serde(default = "default_sign_depth")]
+    depth: f64,
+    text: Option<String>,
+    material: Option<String>,
+}
+
+impl GeneratedSignArgs {
+    fn into_spec(self) -> GeneratedSignSpec {
+        GeneratedSignSpec {
+            path: self.path,
+            width: self.width,
+            height: self.height,
+            depth: self.depth,
+            text: self.text,
+            material: self.material,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct StaticMeshCollisionArgs {
+    paths: Vec<String>,
+    #[serde(default = "default_collision_trace")]
+    collision_trace: String,
+    #[serde(default = "default_true")]
+    simple_collision: bool,
+    #[serde(default = "default_true")]
+    rebuild: bool,
+}
+
+impl StaticMeshCollisionArgs {
+    fn into_spec(self) -> StaticMeshCollisionSpec {
+        StaticMeshCollisionSpec {
+            paths: self.paths,
+            collision_trace: self.collision_trace,
+            simple_collision: self.simple_collision,
+            rebuild: self.rebuild,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1993,6 +2401,42 @@ fn default_texture_color_b() -> [f64; 4] {
 
 fn default_checker_size() -> u32 {
     8
+}
+
+fn default_building_width() -> f64 {
+    800.0
+}
+
+fn default_building_depth() -> f64 {
+    600.0
+}
+
+fn default_building_height() -> f64 {
+    2400.0
+}
+
+fn default_building_floors() -> u32 {
+    12
+}
+
+fn default_building_window_columns() -> u32 {
+    6
+}
+
+fn default_sign_width() -> f64 {
+    900.0
+}
+
+fn default_sign_height() -> f64 {
+    240.0
+}
+
+fn default_sign_depth() -> f64 {
+    30.0
+}
+
+fn default_collision_trace() -> String {
+    "project_default".to_string()
 }
 
 fn default_moon_rotation() -> [f64; 3] {

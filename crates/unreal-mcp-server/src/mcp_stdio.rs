@@ -162,6 +162,41 @@ fn tools_list_response(id: Value) -> Value {
                     path_only_schema()
                 ),
                 tool_definition(
+                    "asset.import_texture",
+                    "Import one local texture file into a Content Browser asset.",
+                    asset_import_schema()
+                ),
+                tool_definition(
+                    "asset.import_static_mesh",
+                    "Import one local static mesh file into a Content Browser asset.",
+                    asset_import_schema()
+                ),
+                tool_definition(
+                    "asset.bulk_import",
+                    "Import many texture or static mesh assets in one bridge request.",
+                    asset_bulk_import_schema()
+                ),
+                tool_definition(
+                    "asset.validate",
+                    "Validate Unreal asset paths and return compact class data.",
+                    asset_validate_schema()
+                ),
+                tool_definition(
+                    "mesh.create_building",
+                    "Create a reusable generated building static mesh asset.",
+                    mesh_create_building_schema()
+                ),
+                tool_definition(
+                    "mesh.create_sign",
+                    "Create a reusable generated sign static mesh asset.",
+                    mesh_create_sign_schema()
+                ),
+                tool_definition(
+                    "static_mesh.set_collision",
+                    "Set simple collision options on static mesh assets.",
+                    static_mesh_collision_schema()
+                ),
+                tool_definition(
                     "material.create",
                     "Create a simple Unreal material asset.",
                     material_create_schema()
@@ -404,6 +439,118 @@ fn path_only_schema() -> Value {
             "path": { "type": "string" }
         },
         "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn asset_import_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "source_file": { "type": "string" },
+            "destination_path": { "type": "string" },
+            "replace_existing": { "type": "boolean" },
+            "save": { "type": "boolean" },
+            "srgb": { "type": "boolean" },
+            "generate_collision": { "type": "boolean" }
+        },
+        "required": ["source_file", "destination_path"],
+        "additionalProperties": false
+    })
+}
+
+fn asset_import_item_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["texture", "static_mesh"]
+            },
+            "source_file": { "type": "string" },
+            "destination_path": { "type": "string" },
+            "replace_existing": { "type": "boolean" },
+            "save": { "type": "boolean" },
+            "srgb": { "type": "boolean" },
+            "generate_collision": { "type": "boolean" }
+        },
+        "required": ["kind", "source_file", "destination_path"],
+        "additionalProperties": false
+    })
+}
+
+fn asset_bulk_import_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": asset_import_item_schema()
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": false
+    })
+}
+
+fn asset_validate_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "paths": string_array_schema()
+        },
+        "required": ["paths"],
+        "additionalProperties": false
+    })
+}
+
+fn mesh_create_building_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "width": { "type": "number", "minimum": 1 },
+            "depth": { "type": "number", "minimum": 1 },
+            "height": { "type": "number", "minimum": 1 },
+            "floors": { "type": "integer", "minimum": 1 },
+            "window_rows": { "type": "integer", "minimum": 0 },
+            "window_columns": { "type": "integer", "minimum": 0 },
+            "material": { "type": "string" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn mesh_create_sign_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "width": { "type": "number", "minimum": 1 },
+            "height": { "type": "number", "minimum": 1 },
+            "depth": { "type": "number", "minimum": 1 },
+            "text": { "type": "string" },
+            "material": { "type": "string" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn static_mesh_collision_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "paths": string_array_schema(),
+            "collision_trace": {
+                "type": "string",
+                "enum": ["project_default", "simple_and_complex", "use_simple_as_complex", "use_complex_as_simple"]
+            },
+            "simple_collision": { "type": "boolean" },
+            "rebuild": { "type": "boolean" }
+        },
+        "required": ["paths"],
         "additionalProperties": false
     })
 }
@@ -945,6 +1092,13 @@ async fn call_tool(
         "world.query" => tools.world_query(arguments).await,
         "world.snapshot" => tools.world_snapshot(arguments).await,
         "asset.create_folder" => tools.asset_create_folder(arguments).await,
+        "asset.import_texture" => tools.asset_import_texture(arguments).await,
+        "asset.import_static_mesh" => tools.asset_import_static_mesh(arguments).await,
+        "asset.bulk_import" => tools.asset_bulk_import(arguments).await,
+        "asset.validate" => tools.asset_validate(arguments).await,
+        "mesh.create_building" => tools.mesh_create_building(arguments).await,
+        "mesh.create_sign" => tools.mesh_create_sign(arguments).await,
+        "static_mesh.set_collision" => tools.static_mesh_set_collision(arguments).await,
         "material.create" => tools.material_create(arguments).await,
         "material.create_instance" => tools.material_create_instance(arguments).await,
         "material.create_procedural_texture" => {

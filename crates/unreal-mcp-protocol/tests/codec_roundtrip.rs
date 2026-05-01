@@ -9,8 +9,8 @@ use unreal_mcp_protocol::{
     MaterialParameter, MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
     PlacementSnapSpec, ProceduralTextureOperation, ProtocolError, RequestEnvelope,
     ResponseEnvelope, ResponseMode, RuntimeAnimationOperation, RuntimeAnimationSpec, SpawnedActor,
-    StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation, TextureCreateSpec,
-    Transform, WorldQueryResult,
+    StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation,
+    StaticMeshOperationResult, TextureCreateSpec, Transform, WorldQueryResult,
 };
 
 #[test]
@@ -748,10 +748,13 @@ fn asset_import_mesh_results_roundtrip_preserve_payloads() {
                 vertex_count: 96,
                 triangle_count: 48,
             }),
-            CommandResult::StaticMeshOperation(StaticMeshOperation {
-                path: "/Game/MCP/Meshes/SM_TestBuilding".to_string(),
-                changed: true,
-                collision_trace: "use_simple_as_complex".to_string(),
+            CommandResult::StaticMeshOperation(StaticMeshOperationResult {
+                meshes: vec![StaticMeshOperation {
+                    path: "/Game/MCP/Meshes/SM_TestBuilding".to_string(),
+                    changed: true,
+                    collision_trace: "use_simple_as_complex".to_string(),
+                }],
+                count: 1,
             }),
         ],
     );

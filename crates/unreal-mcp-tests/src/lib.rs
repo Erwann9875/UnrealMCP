@@ -4,12 +4,14 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use unreal_mcp_protocol::{
-    decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetOperation,
+    decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetImportOperation,
+    AssetImportResult, AssetOperation, AssetValidation, AssetValidationResult,
     BlueprintComponentOperation, BlueprintOperation, BridgeStatus, Command, CommandResult,
-    LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightSummary, LightingOperation,
-    MaterialAppliedActor, MaterialApplyResult, MaterialOperation, MaterialParameterOperation,
-    PlacementSnapActor, PlacementSnapResult, ProceduralTextureOperation, ResponseEnvelope,
-    RuntimeAnimationOperation, SpawnedActor, Transform, WorldQueryResult,
+    GeneratedMeshOperation, LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightSummary,
+    LightingOperation, MaterialAppliedActor, MaterialApplyResult, MaterialOperation,
+    MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
+    ProceduralTextureOperation, ResponseEnvelope, RuntimeAnimationOperation, SpawnedActor,
+    StaticMeshOperation, StaticMeshOperationResult, Transform, WorldQueryResult,
 };
 
 pub struct FakeBridge {
@@ -88,6 +90,13 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "world.query".to_string(),
                     "world.snapshot".to_string(),
                     "asset.create_folder".to_string(),
+                    "asset.import_texture".to_string(),
+                    "asset.import_static_mesh".to_string(),
+                    "asset.bulk_import".to_string(),
+                    "asset.validate".to_string(),
+                    "mesh.create_building".to_string(),
+                    "mesh.create_sign".to_string(),
+                    "static_mesh.set_collision".to_string(),
                     "material.create".to_string(),
                     "material.create_instance".to_string(),
                     "material.create_procedural_texture".to_string(),
@@ -185,6 +194,100 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                 path,
                 created: true,
             }),
+            Command::AssetImportTexture { spec } => CommandResult::AssetImport(AssetImportResult {
+                assets: vec![AssetImportOperation {
+                    source_file: spec.source_file,
+                    path: spec.destination_path,
+                    class_name: "Texture2D".to_string(),
+                    imported: true,
+                }],
+                count: 1,
+            }),
+            Command::AssetImportStaticMesh { spec } => {
+                CommandResult::AssetImport(AssetImportResult {
+                    assets: vec![AssetImportOperation {
+                        source_file: spec.source_file,
+                        path: spec.destination_path,
+                        class_name: "StaticMesh".to_string(),
+                        imported: true,
+                    }],
+                    count: 1,
+                })
+            }
+            Command::AssetBulkImport { items } => {
+                let assets = items
+                    .into_iter()
+                    .map(|item| AssetImportOperation {
+                        source_file: item.source_file,
+                        path: item.destination_path,
+                        class_name: if item.kind == "static_mesh" {
+                            "StaticMesh".to_string()
+                        } else {
+                            "Texture2D".to_string()
+                        },
+                        imported: true,
+                    })
+                    .collect::<Vec<_>>();
+                CommandResult::AssetImport(AssetImportResult {
+                    count: assets.len(),
+                    assets,
+                })
+            }
+            Command::AssetValidate { spec } => {
+                let assets = spec
+                    .paths
+                    .into_iter()
+                    .map(|path| {
+                        let class_name = if path.contains("/SM_") {
+                            "StaticMesh"
+                        } else {
+                            "Texture2D"
+                        };
+                        AssetValidation {
+                            path,
+                            exists: true,
+                            class_name: Some(class_name.to_string()),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                CommandResult::AssetValidation(AssetValidationResult {
+                    count: assets.len(),
+                    assets,
+                })
+            }
+            Command::MeshCreateBuilding { spec } => {
+                CommandResult::GeneratedMesh(GeneratedMeshOperation {
+                    path: spec.path,
+                    created: true,
+                    vertex_count: 24
+                        + (spec.window_rows as usize * spec.window_columns as usize * 4),
+                    triangle_count: 12
+                        + (spec.window_rows as usize * spec.window_columns as usize * 2),
+                })
+            }
+            Command::MeshCreateSign { spec } => {
+                CommandResult::GeneratedMesh(GeneratedMeshOperation {
+                    path: spec.path,
+                    created: true,
+                    vertex_count: 24,
+                    triangle_count: 12,
+                })
+            }
+            Command::StaticMeshSetCollision { spec } => {
+                let meshes = spec
+                    .paths
+                    .into_iter()
+                    .map(|path| StaticMeshOperation {
+                        path,
+                        changed: true,
+                        collision_trace: spec.collision_trace.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                CommandResult::StaticMeshOperation(StaticMeshOperationResult {
+                    count: meshes.len(),
+                    meshes,
+                })
+            }
             Command::MaterialCreate { path, .. } => {
                 CommandResult::MaterialOperation(MaterialOperation {
                     path,

@@ -18,7 +18,7 @@ pub use commands::{
     MaterialParameter, MaterialParameterOperation, MaterialParameterValue, PlacementSnapActor,
     PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation, RuntimeAnimationOperation,
     RuntimeAnimationSpec, SpawnedActor, StaticMeshCollisionSpec, StaticMeshComponentSpec,
-    StaticMeshOperation, TextureCreateSpec, Transform, WorldQueryResult,
+    StaticMeshOperation, StaticMeshOperationResult, TextureCreateSpec, Transform, WorldQueryResult,
 };
 pub use envelope::{ErrorMode, IndexedError, RequestEnvelope, ResponseEnvelope, ResponseMode};
 pub use error::{ProtocolError, ProtocolResult};
