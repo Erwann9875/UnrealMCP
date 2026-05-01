@@ -197,7 +197,11 @@ impl ConnectionTools {
         arguments: serde_json::Value,
     ) -> anyhow::Result<ToolResponse> {
         let args: WorldBulkSpawnArgs = serde_json::from_value(arguments)?;
-        let actors = args.actors.into_iter().map(ActorSpawnArgs::into_spec).collect();
+        let actors = args
+            .actors
+            .into_iter()
+            .map(ActorSpawnArgs::into_spec)
+            .collect();
         let response = self
             .send_single("world.bulk_spawn", Command::WorldBulkSpawn { actors })
             .await?;

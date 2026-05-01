@@ -5,8 +5,8 @@ use tokio::task::JoinHandle;
 
 use unreal_mcp_protocol::{
     decode_msgpack_request, encode_msgpack_response, ActorQuery, BridgeStatus, Command,
-    CommandResult, LevelInfo, LevelList, LevelOperation, ResponseEnvelope, SpawnedActor,
-    Transform, WorldQueryResult,
+    CommandResult, LevelInfo, LevelList, LevelOperation, ResponseEnvelope, SpawnedActor, Transform,
+    WorldQueryResult,
 };
 
 pub struct FakeBridge {
@@ -86,13 +86,13 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "world.snapshot".to_string(),
                 ],
             },
-            Command::LevelCreate { path, open, save } => CommandResult::LevelOperation(
-                LevelOperation {
+            Command::LevelCreate { path, open, save } => {
+                CommandResult::LevelOperation(LevelOperation {
                     path,
                     opened: open,
                     saved: save,
-                },
-            ),
+                })
+            }
             Command::LevelOpen { path } => CommandResult::LevelOperation(LevelOperation {
                 path,
                 opened: true,

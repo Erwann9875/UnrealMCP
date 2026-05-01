@@ -112,9 +112,13 @@ pub struct WorldQueryResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "data")]
 pub enum CommandResult {
-    Pong { bridge_version: String },
+    Pong {
+        bridge_version: String,
+    },
     Status(BridgeStatus),
-    Capabilities { commands: Vec<String> },
+    Capabilities {
+        commands: Vec<String>,
+    },
     LevelList(LevelList),
     LevelOperation(LevelOperation),
     WorldBulkSpawn {
