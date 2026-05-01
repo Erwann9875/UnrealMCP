@@ -354,6 +354,77 @@ lights.
 }
 ```
 
+## `landscape.create`
+
+Creates or updates a named Unreal Landscape actor. Component count defaults to
+`[4, 4]`, section size defaults to `63`, sections per component defaults to
+`1`, and scale defaults to `[100.0, 100.0, 100.0]`.
+
+```json
+{
+  "name": "MCP_Landscape",
+  "component_count": [4, 4],
+  "section_size": 63,
+  "sections_per_component": 1,
+  "location": [0.0, 0.0, 0.0],
+  "scale": [100.0, 100.0, 100.0],
+  "material": "/Game/MCP/Materials/M_Ground",
+  "tags": ["mcp.scene:la"]
+}
+```
+
+Returns a compact landscape operation with `name`, `path`, `component_count`,
+`vertex_count`, and changed fields.
+
+## `landscape.set_heightfield`
+
+Updates an existing landscape heightfield in one bridge command. If `samples`
+is empty, the bridge generates a procedural heightfield from `amplitude`,
+`frequency`, `seed`, and optional center flattening via `city_pad_radius`.
+If `samples` is provided, it must contain exactly `width * height` normalized
+height values.
+
+```json
+{
+  "name": "MCP_Landscape",
+  "amplitude": 1200.0,
+  "frequency": 2.0,
+  "seed": 1234,
+  "city_pad_radius": 6500.0,
+  "city_pad_falloff": 1500.0
+}
+```
+
+## `landscape.paint_layers`
+
+Assigns a landscape material and registers named paint layers. The first layer
+is filled to full weight and later layers are initialized to zero weight.
+
+```json
+{
+  "name": "MCP_Landscape",
+  "material": "/Game/MCP/Materials/M_Ground",
+  "layers": ["Concrete", "Hills", "Sand"]
+}
+```
+
+## `placement.bulk_snap_to_ground`
+
+Snaps actors selected by names or tags onto the first blocking `WorldStatic`
+surface found by a vertical trace. `include_generated` selects actors tagged
+with `mcp.generated` when no explicit tags are supplied.
+
+```json
+{
+  "tags": ["mcp.group:buildings"],
+  "include_generated": true,
+  "trace_distance": 50000.0,
+  "offset_z": 0.0
+}
+```
+
+Returns snapped actor summaries with old and new locations.
+
 ## `blueprint.create_actor`
 
 Creates an actor Blueprint asset. `parent_class` defaults to `Actor`.
