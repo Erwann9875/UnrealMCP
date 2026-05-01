@@ -4,9 +4,9 @@
 
 **Goal:** Build the first runnable foundation for a Rust MCP server and Unreal Editor bridge plugin.
 
-**Architecture:** The Rust workspace owns protocol types, MessagePack/JSON-debug serialization, MCP stdio handling, and a localhost bridge client. The Unreal plugin skeleton owns editor startup, localhost bridge lifecycle, and ping/status/capability commands so later plans can add editor command domains behind the same protocol.
+**Architecture:** The Rust workspace owns protocol types, MessagePack/JSON-debug serialization, a stdio lifetime skeleton, Rust connection tool handlers, and a localhost bridge client. The Unreal plugin skeleton owns editor startup, localhost bridge lifecycle, and ping/status/capability commands so later plans can add MCP JSON-RPC dispatch wiring and editor command domains behind the same protocol.
 
-**Tech Stack:** Rust 2021, Tokio, Serde, rmp-serde, JSON-RPC over MCP stdio, Unreal Engine 5.5+ C++ editor plugin.
+**Tech Stack:** Rust 2021, Tokio, Serde, rmp-serde, MCP stdio lifetime management with JSON-RPC dispatch deferred, Unreal Engine 5.5+ C++ editor plugin.
 
 ---
 
@@ -20,7 +20,7 @@ This plan implements the buildable foundation only:
 - Compact response modes and indexed errors.
 - Fake Unreal bridge for Rust integration tests.
 - Rust bridge client with reconnect-friendly connection status.
-- Minimal MCP stdio server exposing `connection.ping`, `connection.status`, and `connection.capabilities`.
+- Stdio lifetime skeleton plus Rust connection tool handlers; MCP JSON-RPC dispatch wiring is deferred to a follow-up plan.
 - Unreal Editor plugin skeleton with ping/status/capabilities handlers.
 - Documentation for running the first smoke tests.
 
@@ -28,6 +28,7 @@ Out of scope for this plan:
 
 - Actor, level, material, landscape, Blueprint, lighting, and scene helper commands.
 - Vendored C++ MessagePack dependency integration.
+- Full MCP JSON-RPC stdio dispatcher and stdio tool registration for `connection.status` and `connection.capabilities`.
 - Packaged game/runtime support.
 
 Those command domains should be implemented as follow-up plans after this foundation compiles and passes tests.
@@ -49,8 +50,8 @@ Those command domains should be implemented as follow-up plans after this founda
 - Create `crates/unreal-mcp-server/src/main.rs`: executable entry point.
 - Create `crates/unreal-mcp-server/src/lib.rs`: public server modules.
 - Create `crates/unreal-mcp-server/src/bridge_client.rs`: TCP bridge client.
-- Create `crates/unreal-mcp-server/src/mcp_stdio.rs`: MCP stdio transport.
-- Create `crates/unreal-mcp-server/src/tools.rs`: connection tool handlers.
+- Create `crates/unreal-mcp-server/src/mcp_stdio.rs`: stdio lifetime skeleton.
+- Create `crates/unreal-mcp-server/src/tools.rs`: Rust connection tool handlers.
 - Create `crates/unreal-mcp-server/tests/connection_tools.rs`: fake bridge integration tests.
 - Create `crates/unreal-mcp-tests/Cargo.toml`: test helper crate manifest.
 - Create `crates/unreal-mcp-tests/src/lib.rs`: fake bridge utilities.
@@ -140,15 +141,20 @@ High-performance MCP tooling for controlling Unreal Editor 5.5+ from Codex.
 
 Version 1 is editor-only. The system is split into:
 
-- A Rust MCP server that talks to Codex over stdio.
+- A Rust MCP server foundation with a stdio lifetime skeleton.
 - An Unreal Editor C++ plugin that executes editor commands.
 - A localhost bridge protocol optimized for bulk operations and compact responses.
+
+The current foundation includes Rust connection tool handlers and bridge
+protocol coverage. MCP JSON-RPC stdio dispatch wiring, including stdio tool
+registration for `connection.status` and `connection.capabilities`, is deferred
+to a follow-up plan.
 
 ## First Smoke Test
 
 ```powershell
 cargo test
-cargo run -p unreal-mcp-server -- --help
+"" | cargo run -p unreal-mcp-server
 ```
 
 ## Design Docs
@@ -839,7 +845,7 @@ git commit -m "feat(server): add bridge client"
 
 ---
 
-## Task 6: MCP Stdio Skeleton
+## Task 6: MCP Stdio Lifetime Skeleton
 
 **Files:**
 - Create: `C:/Users/Erwann/Documents/UnrealMCP/crates/unreal-mcp-server/src/main.rs`
@@ -954,17 +960,24 @@ impl ConnectionTools {
 }
 ```
 
-Add `crates/unreal-mcp-server/src/mcp_stdio.rs`:
+Add `crates/unreal-mcp-server/src/mcp_stdio.rs`. This is only the stdio
+lifetime skeleton; MCP JSON-RPC request parsing and tool dispatch are deferred
+to a follow-up plan.
 
 ```rust
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
-pub async fn run_stdio_server<R, W>(_reader: R, _writer: W) -> anyhow::Result<()>
+pub async fn run_stdio_server<R, W>(mut reader: R, _writer: W) -> anyhow::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    Ok(())
+    let mut buffer = [0_u8; 8192];
+    loop {
+        if reader.read(&mut buffer).await? == 0 {
+            return Ok(());
+        }
+    }
 }
 ```
 
@@ -1001,10 +1014,10 @@ Expected: pass.
 Run:
 
 ```powershell
-cargo run -p unreal-mcp-server
+"" | cargo run -p unreal-mcp-server
 ```
 
-Expected: process starts, waits on stdin, and exits cleanly when stdin closes.
+Expected: process starts, reads stdin until EOF, and exits cleanly.
 
 - [ ] **Step 6: Commit**
 
@@ -1224,20 +1237,20 @@ Add `unreal/UnrealMCPBridge/Source/UnrealMCPBridge/Private/Commands/ConnectionCo
 
 FString FConnectionCommands::Ping()
 {
-    return TEXT("{\"type\":\"pong\",\"bridge_version\":\"0.1.0\"}");
+    return TEXT("{\"type\":\"pong\",\"data\":{\"bridge_version\":\"0.1.0\"}}");
 }
 
 FString FConnectionCommands::Status(bool bBridgeRunning)
 {
     return FString::Printf(
-        TEXT("{\"connected\":%s,\"bridge_version\":\"0.1.0\",\"unreal_version\":\"%s\"}"),
+        TEXT("{\"type\":\"status\",\"data\":{\"connected\":%s,\"bridge_version\":\"0.1.0\",\"unreal_version\":\"%s\"}}"),
         bBridgeRunning ? TEXT("true") : TEXT("false"),
         *FEngineVersion::Current().ToString());
 }
 
 FString FConnectionCommands::Capabilities()
 {
-    return TEXT("{\"commands\":[\"connection.ping\",\"connection.status\",\"connection.capabilities\"]}");
+    return TEXT("{\"type\":\"capabilities\",\"data\":{\"commands\":[\"connection.ping\",\"connection.status\",\"connection.capabilities\"]}}");
 }
 ```
 
@@ -1317,7 +1330,10 @@ Add `docs/protocol/tools.md`:
 ```markdown
 # MCP Tools
 
-The first implemented tool group is `connection`.
+The first implemented protocol group is `connection`. In this foundation,
+only `connection.ping` has a Rust tool handler and the MCP stdio path remains
+a lifetime skeleton. MCP JSON-RPC dispatch wiring and stdio registration for
+`connection.status` and `connection.capabilities` are deferred.
 
 ## `connection.ping`
 
@@ -1335,18 +1351,40 @@ Default response shape:
 
 ## `connection.status`
 
-Returns compact connection and Unreal version details.
+Protocol command and Unreal bridge skeleton entry. It is not wired as an MCP
+stdio tool in this foundation. Planned MCP dispatch wiring will return compact
+connection and Unreal version details.
+
+Bridge result shape:
+
+```json
+{
+  "type": "status",
+  "data": {
+    "connected": true,
+    "bridge_version": "0.1.0",
+    "unreal_version": "5.5.0"
+  }
+}
+```
 
 ## `connection.capabilities`
 
-Returns supported command names. The first version returns:
+Protocol command and Unreal bridge skeleton entry. It is not wired as an MCP
+stdio tool in this foundation. Planned MCP dispatch wiring will return
+supported command names. The current bridge/protocol shape is:
 
 ```json
-[
-  "connection.ping",
-  "connection.status",
-  "connection.capabilities"
-]
+{
+  "type": "capabilities",
+  "data": {
+    "commands": [
+      "connection.ping",
+      "connection.status",
+      "connection.capabilities"
+    ]
+  }
+}
 ```
 ```
 

@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use unreal_mcp_protocol::{
     encode_msgpack_response, BridgeStatus, Command, CommandResult, ErrorMode, RequestEnvelope,
     ResponseEnvelope, ResponseMode,
@@ -162,6 +165,74 @@ async fn bridge_client_rejects_oversized_response_frame() {
     );
 
     bridge_task.await.expect("oversized response bridge task");
+}
+
+#[tokio::test]
+async fn bridge_client_rejects_mismatched_response_request_id() {
+    let (address, bridge_task) = start_single_response_bridge(ResponseEnvelope::success(
+        999,
+        3,
+        vec![CommandResult::Pong {
+            bridge_version: "fake-0.1.0".to_string(),
+        }],
+    ))
+    .await
+    .expect("single response bridge");
+
+    let client = BridgeClient::new(address);
+    let error = client
+        .send(RequestEnvelope::new(
+            42,
+            ResponseMode::Summary,
+            ErrorMode::Stop,
+            vec![Command::Ping],
+        ))
+        .await
+        .expect_err("mismatched response request id should fail");
+
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("request id mismatch"),
+        "expected request id mismatch error, got: {error}"
+    );
+
+    bridge_task.await.expect("single response bridge task");
+}
+
+#[tokio::test]
+async fn bridge_client_times_out_when_bridge_stalls() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind stalled bridge");
+    let address = listener
+        .local_addr()
+        .expect("stalled bridge address")
+        .to_string();
+
+    let bridge_task = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.expect("accept stalled connection");
+        sleep(Duration::from_secs(1)).await;
+    });
+
+    let client = BridgeClient::with_timeout(address, Duration::from_millis(50));
+    let error = client
+        .send(RequestEnvelope::new(
+            42,
+            ResponseMode::Summary,
+            ErrorMode::Stop,
+            vec![Command::Ping],
+        ))
+        .await
+        .expect_err("stalled bridge should time out");
+
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("timed out"),
+        "expected timed out error, got: {error}"
+    );
+
+    bridge_task.abort();
+    let _ = bridge_task.await;
 }
 
 async fn start_single_response_bridge(
