@@ -9,9 +9,10 @@ pub use codec::{
 };
 pub use commands::{
     ActorQuery, ActorSpawnSpec, AssetOperation, BridgeStatus, Command, CommandResult, LevelInfo,
-    LevelList, LevelOperation, MaterialAppliedActor, MaterialApplyResult, MaterialAssignment,
-    MaterialOperation, MaterialParameter, MaterialParameterOperation, MaterialParameterValue,
-    ProceduralTextureOperation, SpawnedActor, TextureCreateSpec, Transform, WorldQueryResult,
+    LevelList, LevelOperation, LightSpec, LightSummary, LightingOperation, MaterialAppliedActor,
+    MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
+    MaterialParameterOperation, MaterialParameterValue, ProceduralTextureOperation, SpawnedActor,
+    TextureCreateSpec, Transform, WorldQueryResult,
 };
 pub use envelope::{ErrorMode, IndexedError, RequestEnvelope, ResponseEnvelope, ResponseMode};
 pub use error::{ProtocolError, ProtocolResult};

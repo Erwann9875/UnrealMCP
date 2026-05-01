@@ -1,9 +1,10 @@
 use unreal_mcp_protocol::{
     ActorQuery, ActorSpawnSpec, AssetOperation, Command, CommandResult, ErrorMode, IndexedError,
-    LevelInfo, LevelList, LevelOperation, MaterialAppliedActor, MaterialApplyResult,
-    MaterialAssignment, MaterialOperation, MaterialParameter, MaterialParameterOperation,
-    ProceduralTextureOperation, ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode,
-    SpawnedActor, TextureCreateSpec, Transform, WorldQueryResult,
+    LevelInfo, LevelList, LevelOperation, LightSpec, LightSummary, LightingOperation,
+    MaterialAppliedActor, MaterialApplyResult, MaterialAssignment, MaterialOperation,
+    MaterialParameter, MaterialParameterOperation, ProceduralTextureOperation, ProtocolError,
+    RequestEnvelope, ResponseEnvelope, ResponseMode, SpawnedActor, TextureCreateSpec, Transform,
+    WorldQueryResult,
 };
 
 #[test]
@@ -274,6 +275,100 @@ fn material_instance_and_parameter_requests_roundtrip() {
     let decoded = decode_msgpack_request(&bytes).expect("decode request");
 
     assert_eq!(decoded, request);
+}
+
+#[test]
+fn lighting_requests_roundtrip_preserve_payloads() {
+    let request = RequestEnvelope::new(
+        57,
+        ResponseMode::Summary,
+        ErrorMode::Stop,
+        vec![
+            Command::LightingSetNightScene {
+                moon_rotation: [-35.0, -25.0, 0.0],
+                moon_intensity: 0.12,
+                moon_color: [0.55, 0.65, 1.0, 1.0],
+                sky_intensity: 0.05,
+                fog_density: 0.01,
+                exposure_compensation: -0.5,
+            },
+            Command::LightingSetSky {
+                sky_intensity: 0.08,
+                lower_hemisphere_color: [0.01, 0.012, 0.018, 1.0],
+            },
+            Command::LightingSetFog {
+                density: 0.015,
+                height_falloff: 0.2,
+                color: [0.08, 0.1, 0.16, 1.0],
+                start_distance: 100.0,
+            },
+            Command::LightingSetPostProcess {
+                exposure_compensation: -0.25,
+                min_brightness: 0.2,
+                max_brightness: 1.0,
+                bloom_intensity: 0.6,
+            },
+            Command::LightingBulkSetLights {
+                lights: vec![LightSpec {
+                    name: "MCP_StreetLight_001".to_string(),
+                    kind: "point".to_string(),
+                    transform: Transform {
+                        location: [100.0, 200.0, 360.0],
+                        rotation: [0.0, 0.0, 0.0],
+                        scale: [1.0, 1.0, 1.0],
+                    },
+                    color: [1.0, 0.82, 0.55, 1.0],
+                    intensity: 5000.0,
+                    attenuation_radius: 1000.0,
+                    source_radius: 24.0,
+                    source_width: 64.0,
+                    source_height: 32.0,
+                    tags: vec!["mcp.scene:lighting_smoke".to_string()],
+                }],
+            },
+            Command::LightingSetTimeOfDay {
+                sun_rotation: [-10.0, 110.0, 0.0],
+                sun_intensity: 1.0,
+                sun_color: [1.0, 0.93, 0.82, 1.0],
+            },
+        ],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn lighting_results_roundtrip_preserve_payloads() {
+    let response = ResponseEnvelope::success(
+        58,
+        9,
+        vec![
+            CommandResult::LightingOperation(LightingOperation {
+                changed: vec![
+                    "MCP_MoonLight".to_string(),
+                    "MCP_SkyLight".to_string(),
+                    "MCP_NightFog".to_string(),
+                ],
+                count: 3,
+            }),
+            CommandResult::LightingBulkSetLights {
+                lights: vec![LightSummary {
+                    name: "MCP_StreetLight_001".to_string(),
+                    path: "PersistentLevel.MCP_StreetLight_001".to_string(),
+                    kind: "point".to_string(),
+                }],
+                count: 1,
+            },
+        ],
+    );
+
+    let bytes = encode_msgpack_response(&response).expect("encode response");
+    let decoded = decode_msgpack_response(&bytes).expect("decode response");
+
+    assert_eq!(decoded, response);
 }
 
 #[test]

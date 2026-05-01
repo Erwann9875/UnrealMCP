@@ -71,6 +71,38 @@ pub enum Command {
         material: String,
         slot: u32,
     },
+    LightingSetNightScene {
+        moon_rotation: [f64; 3],
+        moon_intensity: f64,
+        moon_color: [f64; 4],
+        sky_intensity: f64,
+        fog_density: f64,
+        exposure_compensation: f64,
+    },
+    LightingSetSky {
+        sky_intensity: f64,
+        lower_hemisphere_color: [f64; 4],
+    },
+    LightingSetFog {
+        density: f64,
+        height_falloff: f64,
+        color: [f64; 4],
+        start_distance: f64,
+    },
+    LightingSetPostProcess {
+        exposure_compensation: f64,
+        min_brightness: f64,
+        max_brightness: f64,
+        bloom_intensity: f64,
+    },
+    LightingBulkSetLights {
+        lights: Vec<LightSpec>,
+    },
+    LightingSetTimeOfDay {
+        sun_rotation: [f64; 3],
+        sun_intensity: f64,
+        sun_color: [f64; 4],
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,6 +233,20 @@ pub struct MaterialAssignment {
     pub slot: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LightSpec {
+    pub name: String,
+    pub kind: String,
+    pub transform: Transform,
+    pub color: [f64; 4],
+    pub intensity: f64,
+    pub attenuation_radius: f64,
+    pub source_radius: f64,
+    pub source_width: f64,
+    pub source_height: f64,
+    pub tags: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetOperation {
     pub path: String,
@@ -244,6 +290,19 @@ pub struct MaterialApplyResult {
     pub count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LightingOperation {
+    pub changed: Vec<String>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LightSummary {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "data")]
 pub enum CommandResult {
@@ -274,4 +333,9 @@ pub enum CommandResult {
     ProceduralTextureOperation(ProceduralTextureOperation),
     MaterialParameterOperation(MaterialParameterOperation),
     MaterialApply(MaterialApplyResult),
+    LightingOperation(LightingOperation),
+    LightingBulkSetLights {
+        lights: Vec<LightSummary>,
+        count: usize,
+    },
 }
