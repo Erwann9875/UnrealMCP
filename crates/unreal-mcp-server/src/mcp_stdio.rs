@@ -335,6 +335,31 @@ fn tools_list_response(id: Value) -> Value {
                     "runtime.attach_animation_to_actor",
                     "Attach runtime animation assets to placed actors or Blueprints.",
                     runtime_attach_animation_schema()
+                ),
+                tool_definition(
+                    "game.create_player",
+                    "Create editor gameplay player start and camera markers.",
+                    game_create_player_schema()
+                ),
+                tool_definition(
+                    "game.create_checkpoint",
+                    "Create an editor gameplay checkpoint marker.",
+                    game_create_checkpoint_schema()
+                ),
+                tool_definition(
+                    "game.create_interaction",
+                    "Create an editor gameplay interaction marker.",
+                    game_create_interaction_schema()
+                ),
+                tool_definition(
+                    "game.create_collectibles",
+                    "Create many editor collectible markers in one request.",
+                    game_create_collectibles_schema()
+                ),
+                tool_definition(
+                    "game.create_objective_flow",
+                    "Create ordered editor objective flow markers.",
+                    game_create_objective_flow_schema()
                 )
             ]
         }
@@ -1106,6 +1131,120 @@ fn runtime_attach_animation_schema() -> Value {
     })
 }
 
+fn game_create_player_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "location": vec3_schema(),
+            "rotation": vec3_schema(),
+            "spawn_tag": { "type": "string" },
+            "create_camera": { "type": "boolean" },
+            "camera_name": { "type": "string" },
+            "camera_location": vec3_schema(),
+            "camera_rotation": vec3_schema()
+        },
+        "required": ["name"],
+        "additionalProperties": false
+    })
+}
+
+fn game_create_checkpoint_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "checkpoint_id": { "type": "string" },
+            "order": { "type": "integer", "minimum": 0 },
+            "location": vec3_schema(),
+            "rotation": vec3_schema(),
+            "scale": vec3_schema()
+        },
+        "required": ["name"],
+        "additionalProperties": false
+    })
+}
+
+fn game_create_interaction_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "kind": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "interaction_id": { "type": "string" },
+            "target": { "type": "string" },
+            "action": { "type": "string" },
+            "prompt": { "type": "string" },
+            "location": vec3_schema(),
+            "rotation": vec3_schema(),
+            "scale": vec3_schema()
+        },
+        "required": ["name", "kind"],
+        "additionalProperties": false
+    })
+}
+
+fn game_create_collectibles_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name_prefix": { "type": "string" },
+            "mesh": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "origin": vec3_schema(),
+            "rows": { "type": "integer", "minimum": 1 },
+            "columns": { "type": "integer", "minimum": 1 },
+            "spacing": vec2_schema(),
+            "value": { "type": "integer" },
+            "rotation": vec3_schema(),
+            "scale": vec3_schema(),
+            "animation": { "type": "string" }
+        },
+        "required": ["name_prefix", "mesh"],
+        "additionalProperties": false
+    })
+}
+
+fn game_objective_step_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "label": { "type": "string" },
+            "kind": { "type": "string" },
+            "location": vec3_schema(),
+            "rotation": vec3_schema(),
+            "scale": vec3_schema()
+        },
+        "required": ["id"],
+        "additionalProperties": false
+    })
+}
+
+fn game_create_objective_flow_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name_prefix": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "steps": {
+                "type": "array",
+                "items": game_objective_step_schema()
+            }
+        },
+        "required": ["name_prefix"],
+        "additionalProperties": false
+    })
+}
+
 fn world_bulk_delete_schema() -> Value {
     json!({
         "type": "object",
@@ -1259,6 +1398,11 @@ async fn call_tool(
         "runtime.attach_animation_to_actor" => {
             tools.runtime_attach_animation_to_actor(arguments).await
         }
+        "game.create_player" => tools.game_create_player(arguments).await,
+        "game.create_checkpoint" => tools.game_create_checkpoint(arguments).await,
+        "game.create_interaction" => tools.game_create_interaction(arguments).await,
+        "game.create_collectibles" => tools.game_create_collectibles(arguments).await,
+        "game.create_objective_flow" => tools.game_create_objective_flow(arguments).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }

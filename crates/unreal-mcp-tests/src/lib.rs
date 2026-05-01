@@ -7,9 +7,9 @@ use unreal_mcp_protocol::{
     decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetImportOperation,
     AssetImportResult, AssetOperation, AssetValidation, AssetValidationResult,
     BlueprintComponentOperation, BlueprintOperation, BridgeStatus, Command, CommandResult,
-    GeneratedMeshOperation, LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightSummary,
-    LightingOperation, MaterialAppliedActor, MaterialApplyResult, MaterialOperation,
-    MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
+    GameplayOperationResult, GeneratedMeshOperation, LandscapeOperation, LevelInfo, LevelList,
+    LevelOperation, LightSummary, LightingOperation, MaterialAppliedActor, MaterialApplyResult,
+    MaterialOperation, MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
     ProceduralTextureOperation, ResponseEnvelope, RuntimeAnimationOperation, SceneAssemblyResult,
     SpawnedActor, StaticMeshOperation, StaticMeshOperationResult, Transform, WorldQueryResult,
 };
@@ -125,6 +125,11 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "runtime.create_moving_light_animation".to_string(),
                     "runtime.create_material_parameter_animation".to_string(),
                     "runtime.attach_animation_to_actor".to_string(),
+                    "game.create_player".to_string(),
+                    "game.create_checkpoint".to_string(),
+                    "game.create_interaction".to_string(),
+                    "game.create_collectibles".to_string(),
+                    "game.create_objective_flow".to_string(),
                 ],
             },
             Command::LevelCreate { path, open, save } => {
@@ -535,6 +540,24 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     attached,
                 })
             }
+            Command::GameCreatePlayer { spec } => {
+                let count = if spec.create_camera { 2 } else { 1 };
+                gameplay_operation_result(&spec.name, count, 1, 0, 0, 0, 0)
+            }
+            Command::GameCreateCheckpoint { spec } => {
+                gameplay_operation_result(&spec.name, 1, 0, 1, 0, 0, 0)
+            }
+            Command::GameCreateInteraction { spec } => {
+                gameplay_operation_result(&spec.name, 1, 0, 0, 1, 0, 0)
+            }
+            Command::GameCreateCollectibles { spec } => {
+                let count = spec.rows as usize * spec.columns as usize;
+                gameplay_operation_result(&spec.name_prefix, count, 0, 0, 0, count, 0)
+            }
+            Command::GameCreateObjectiveFlow { spec } => {
+                let count = spec.steps.len();
+                gameplay_operation_result(&spec.name_prefix, count, 0, 0, 0, 0, count)
+            }
         })
         .collect();
 
@@ -569,6 +592,41 @@ fn scene_assembly_result(
         sidewalk_count,
         building_count,
         prop_count,
+    })
+}
+
+fn gameplay_operation_result(
+    name_prefix: &str,
+    count: usize,
+    player_count: usize,
+    checkpoint_count: usize,
+    interaction_count: usize,
+    collectible_count: usize,
+    objective_count: usize,
+) -> CommandResult {
+    let spawned = (0..count)
+        .map(|index| SpawnedActor {
+            name: if count == 1 {
+                name_prefix.to_string()
+            } else {
+                format!("{name_prefix}_{index}")
+            },
+            path: if count == 1 {
+                format!("PersistentLevel.{name_prefix}")
+            } else {
+                format!("PersistentLevel.{name_prefix}_{index}")
+            },
+        })
+        .collect::<Vec<_>>();
+
+    CommandResult::GameplayOperation(GameplayOperationResult {
+        spawned,
+        count,
+        player_count,
+        checkpoint_count,
+        interaction_count,
+        collectible_count,
+        objective_count,
     })
 }
 

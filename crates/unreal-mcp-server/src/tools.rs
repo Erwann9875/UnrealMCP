@@ -6,14 +6,16 @@ use unreal_mcp_protocol::{
     ActorSpawnSpec, AssetImportItem, AssetImportResult, AssetImportSpec, AssetOperation,
     AssetValidateSpec, AssetValidationResult, BlueprintComponentOperation, BlueprintOperation,
     BridgeStatus, CityBlockSpec, Command, CommandResult, DistrictSpec, ErrorMode,
-    GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec, GridPlacementSpec,
-    LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint, LandscapeOperation,
-    LevelOperation, LightComponentSpec, LightSpec, LightingOperation, MaterialApplyResult,
-    MaterialAssignment, MaterialOperation, MaterialParameter, MaterialParameterOperation,
-    PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation, RequestEnvelope,
-    ResponseEnvelope, ResponseMode, RoadNetworkSpec, RuntimeAnimationOperation,
-    RuntimeAnimationSpec, SceneAssemblyResult, StaticMeshCollisionSpec, StaticMeshComponentSpec,
-    StaticMeshOperationResult, TextureCreateSpec, Transform,
+    GameCheckpointSpec, GameCollectiblesSpec, GameInteractionSpec, GameObjectiveFlowSpec,
+    GameObjectiveStepSpec, GamePlayerSpec, GameplayOperationResult, GeneratedBuildingSpec,
+    GeneratedMeshOperation, GeneratedSignSpec, GridPlacementSpec, LandscapeCreateSpec,
+    LandscapeHeightPatch, LandscapeLayerPaint, LandscapeOperation, LevelOperation,
+    LightComponentSpec, LightSpec, LightingOperation, MaterialApplyResult, MaterialAssignment,
+    MaterialOperation, MaterialParameter, MaterialParameterOperation, PlacementSnapResult,
+    PlacementSnapSpec, ProceduralTextureOperation, RequestEnvelope, ResponseEnvelope, ResponseMode,
+    RoadNetworkSpec, RuntimeAnimationOperation, RuntimeAnimationSpec, SceneAssemblyResult,
+    StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperationResult, TextureCreateSpec,
+    Transform,
 };
 
 use crate::BridgeClient;
@@ -1200,6 +1202,111 @@ impl ConnectionTools {
         })
     }
 
+    pub async fn game_create_player(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GamePlayerArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "game.create_player",
+                Command::GameCreatePlayer {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_operation("game.create_player", &response)?;
+        Ok(gameplay_operation_response(
+            "game.create_player",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn game_create_checkpoint(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameCheckpointArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "game.create_checkpoint",
+                Command::GameCreateCheckpoint {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_operation("game.create_checkpoint", &response)?;
+        Ok(gameplay_operation_response(
+            "game.create_checkpoint",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn game_create_interaction(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameInteractionArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "game.create_interaction",
+                Command::GameCreateInteraction {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_operation("game.create_interaction", &response)?;
+        Ok(gameplay_operation_response(
+            "game.create_interaction",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn game_create_collectibles(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameCollectiblesArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "game.create_collectibles",
+                Command::GameCreateCollectibles {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_operation("game.create_collectibles", &response)?;
+        Ok(gameplay_operation_response(
+            "game.create_collectibles",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn game_create_objective_flow(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameObjectiveFlowArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "game.create_objective_flow",
+                Command::GameCreateObjectiveFlow {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_operation("game.create_objective_flow", &response)?;
+        Ok(gameplay_operation_response(
+            "game.create_objective_flow",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
     async fn send_single(
         &self,
         command_name: &str,
@@ -1521,6 +1628,23 @@ fn expect_runtime_animation_operation(
     }
 }
 
+fn expect_gameplay_operation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<GameplayOperationResult> {
+    match response.results.as_slice() {
+        [CommandResult::GameplayOperation(operation)] => Ok(operation.clone()),
+        [] => bail!("unexpected {command_name} response: missing gameplay operation result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected gameplay operation, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one gameplay operation result, got {} results",
+            results.len()
+        ),
+    }
+}
+
 fn expect_landscape_operation(
     command_name: &str,
     response: &ResponseEnvelope,
@@ -1750,6 +1874,27 @@ fn runtime_animation_create_response(
             "elapsed_ms": response.elapsed_ms
         }),
     })
+}
+
+fn gameplay_operation_response(
+    tool_name: &'static str,
+    elapsed_ms: u32,
+    result: GameplayOperationResult,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary: format!("Created gameplay actors: {} actor(s).", result.count),
+        data: json!({
+            "count": result.count,
+            "player_count": result.player_count,
+            "checkpoint_count": result.checkpoint_count,
+            "interaction_count": result.interaction_count,
+            "collectible_count": result.collectible_count,
+            "objective_count": result.objective_count,
+            "spawned": result.spawned,
+            "elapsed_ms": elapsed_ms
+        }),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2615,6 +2760,204 @@ struct RuntimeAttachAnimationArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct GamePlayerArgs {
+    name: String,
+    scene: Option<String>,
+    group: Option<String>,
+    #[serde(default)]
+    location: [f64; 3],
+    #[serde(default)]
+    rotation: [f64; 3],
+    spawn_tag: Option<String>,
+    #[serde(default)]
+    create_camera: bool,
+    camera_name: Option<String>,
+    #[serde(default = "default_game_camera_location")]
+    camera_location: [f64; 3],
+    #[serde(default = "default_game_camera_rotation")]
+    camera_rotation: [f64; 3],
+}
+
+impl GamePlayerArgs {
+    fn into_spec(self) -> GamePlayerSpec {
+        GamePlayerSpec {
+            name: self.name,
+            scene: self.scene,
+            group: self.group,
+            location: self.location,
+            rotation: self.rotation,
+            spawn_tag: self.spawn_tag,
+            create_camera: self.create_camera,
+            camera_name: self.camera_name,
+            camera_location: self.camera_location,
+            camera_rotation: self.camera_rotation,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GameCheckpointArgs {
+    name: String,
+    scene: Option<String>,
+    group: Option<String>,
+    checkpoint_id: Option<String>,
+    #[serde(default)]
+    order: u32,
+    #[serde(default)]
+    location: [f64; 3],
+    #[serde(default)]
+    rotation: [f64; 3],
+    #[serde(default = "default_game_checkpoint_scale")]
+    scale: [f64; 3],
+}
+
+impl GameCheckpointArgs {
+    fn into_spec(self) -> GameCheckpointSpec {
+        let checkpoint_id = self.checkpoint_id.unwrap_or_else(|| self.name.clone());
+        GameCheckpointSpec {
+            name: self.name,
+            scene: self.scene,
+            group: self.group,
+            checkpoint_id,
+            order: self.order,
+            location: self.location,
+            rotation: self.rotation,
+            scale: self.scale,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GameInteractionArgs {
+    name: String,
+    kind: String,
+    scene: Option<String>,
+    group: Option<String>,
+    interaction_id: Option<String>,
+    target: Option<String>,
+    action: Option<String>,
+    prompt: Option<String>,
+    #[serde(default)]
+    location: [f64; 3],
+    #[serde(default)]
+    rotation: [f64; 3],
+    #[serde(default = "default_game_interaction_scale")]
+    scale: [f64; 3],
+}
+
+impl GameInteractionArgs {
+    fn into_spec(self) -> GameInteractionSpec {
+        GameInteractionSpec {
+            name: self.name,
+            kind: self.kind,
+            scene: self.scene,
+            group: self.group,
+            interaction_id: self.interaction_id,
+            target: self.target,
+            action: self.action,
+            prompt: self.prompt,
+            location: self.location,
+            rotation: self.rotation,
+            scale: self.scale,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GameCollectiblesArgs {
+    name_prefix: String,
+    mesh: String,
+    scene: Option<String>,
+    group: Option<String>,
+    #[serde(default)]
+    origin: [f64; 3],
+    #[serde(default = "default_scene_rows")]
+    rows: u32,
+    #[serde(default = "default_scene_columns")]
+    columns: u32,
+    #[serde(default = "default_game_collectible_spacing")]
+    spacing: [f64; 2],
+    #[serde(default = "default_game_collectible_value")]
+    value: i32,
+    #[serde(default)]
+    rotation: [f64; 3],
+    #[serde(default = "default_game_collectible_scale")]
+    scale: [f64; 3],
+    animation: Option<String>,
+}
+
+impl GameCollectiblesArgs {
+    fn into_spec(self) -> GameCollectiblesSpec {
+        GameCollectiblesSpec {
+            name_prefix: self.name_prefix,
+            mesh: self.mesh,
+            scene: self.scene,
+            group: self.group,
+            origin: self.origin,
+            rows: self.rows,
+            columns: self.columns,
+            spacing: self.spacing,
+            value: self.value,
+            rotation: self.rotation,
+            scale: self.scale,
+            animation: self.animation,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GameObjectiveFlowArgs {
+    name_prefix: String,
+    scene: Option<String>,
+    group: Option<String>,
+    #[serde(default)]
+    steps: Vec<GameObjectiveStepArgs>,
+}
+
+impl GameObjectiveFlowArgs {
+    fn into_spec(self) -> GameObjectiveFlowSpec {
+        GameObjectiveFlowSpec {
+            name_prefix: self.name_prefix,
+            scene: self.scene,
+            group: self.group,
+            steps: self
+                .steps
+                .into_iter()
+                .map(GameObjectiveStepArgs::into_spec)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GameObjectiveStepArgs {
+    id: String,
+    label: Option<String>,
+    #[serde(default = "default_game_objective_kind")]
+    kind: String,
+    #[serde(default)]
+    location: [f64; 3],
+    #[serde(default)]
+    rotation: [f64; 3],
+    #[serde(default = "default_game_objective_scale")]
+    scale: [f64; 3],
+}
+
+impl GameObjectiveStepArgs {
+    fn into_spec(self) -> GameObjectiveStepSpec {
+        let label = self.label.unwrap_or_else(|| self.id.clone());
+        GameObjectiveStepSpec {
+            id: self.id,
+            label,
+            kind: self.kind,
+            location: self.location,
+            rotation: self.rotation,
+            scale: self.scale,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct ScalarParameterArg {
     name: String,
     value: f64,
@@ -2924,4 +3267,40 @@ fn default_runtime_amplitude() -> f64 {
 
 fn default_runtime_axis() -> [f64; 3] {
     [0.0, 0.0, 1.0]
+}
+
+fn default_game_camera_location() -> [f64; 3] {
+    [-400.0, 0.0, 260.0]
+}
+
+fn default_game_camera_rotation() -> [f64; 3] {
+    [-10.0, 0.0, 0.0]
+}
+
+fn default_game_checkpoint_scale() -> [f64; 3] {
+    [2.0, 2.0, 0.25]
+}
+
+fn default_game_interaction_scale() -> [f64; 3] {
+    [0.6, 0.6, 0.6]
+}
+
+fn default_game_collectible_spacing() -> [f64; 2] {
+    [180.0, 180.0]
+}
+
+fn default_game_collectible_value() -> i32 {
+    1
+}
+
+fn default_game_collectible_scale() -> [f64; 3] {
+    [0.25, 0.25, 0.25]
+}
+
+fn default_game_objective_kind() -> String {
+    "location".to_string()
+}
+
+fn default_game_objective_scale() -> [f64; 3] {
+    [1.0, 1.0, 1.0]
 }

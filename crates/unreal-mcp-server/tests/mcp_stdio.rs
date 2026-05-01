@@ -97,6 +97,11 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
             "runtime.create_moving_light_animation",
             "runtime.create_material_parameter_animation",
             "runtime.attach_animation_to_actor",
+            "game.create_player",
+            "game.create_checkpoint",
+            "game.create_interaction",
+            "game.create_collectibles",
+            "game.create_objective_flow",
         ]
     );
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
@@ -256,6 +261,26 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     assert_eq!(
         tool_by_name("runtime.attach_animation_to_actor")["inputSchema"]["required"],
         json!(["animations"])
+    );
+    assert_eq!(
+        tool_by_name("game.create_player")["inputSchema"]["required"],
+        json!(["name"])
+    );
+    assert_eq!(
+        tool_by_name("game.create_checkpoint")["inputSchema"]["required"],
+        json!(["name"])
+    );
+    assert_eq!(
+        tool_by_name("game.create_interaction")["inputSchema"]["required"],
+        json!(["name", "kind"])
+    );
+    assert_eq!(
+        tool_by_name("game.create_collectibles")["inputSchema"]["required"],
+        json!(["name_prefix", "mesh"])
+    );
+    assert_eq!(
+        tool_by_name("game.create_objective_flow")["inputSchema"]["required"],
+        json!(["name_prefix"])
     );
 }
 
@@ -1031,6 +1056,150 @@ async fn stdio_tools_call_dispatches_runtime_attach_animation_to_actor() {
         .as_str()
         .expect("summary text")
         .contains("Attached runtime animation to 2 target"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_gameplay_foundation_tools() {
+    let player_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 19,
+        "method": "tools/call",
+        "params": {
+            "name": "game.create_player",
+            "arguments": {
+                "name": "MCP_PlayerStart",
+                "scene": "prototype",
+                "group": "gameplay",
+                "location": [0.0, 0.0, 120.0],
+                "spawn_tag": "default",
+                "create_camera": true
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(player_response["result"]["isError"], false);
+    let player_content = player_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(player_content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Created gameplay actors"));
+    assert!(player_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"player_count\""));
+
+    let checkpoint_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "tools/call",
+        "params": {
+            "name": "game.create_checkpoint",
+            "arguments": {
+                "name": "MCP_Checkpoint_A",
+                "checkpoint_id": "cp_a",
+                "order": 1,
+                "location": [1000.0, 0.0, 80.0]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(checkpoint_response["result"]["isError"], false);
+    let checkpoint_content = checkpoint_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(checkpoint_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"checkpoint_count\""));
+
+    let interaction_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 21,
+        "method": "tools/call",
+        "params": {
+            "name": "game.create_interaction",
+            "arguments": {
+                "name": "MCP_DoorSwitch",
+                "kind": "button",
+                "interaction_id": "door_switch",
+                "target": "MCP_Door_A",
+                "action": "open",
+                "prompt": "Open"
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(interaction_response["result"]["isError"], false);
+    let interaction_content = interaction_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(interaction_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"interaction_count\""));
+
+    let collectibles_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 22,
+        "method": "tools/call",
+        "params": {
+            "name": "game.create_collectibles",
+            "arguments": {
+                "name_prefix": "MCP_Coin",
+                "mesh": "/Engine/BasicShapes/Cube.Cube",
+                "scene": "prototype",
+                "rows": 2,
+                "columns": 3,
+                "spacing": [180.0, 160.0],
+                "value": 10
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(collectibles_response["result"]["isError"], false);
+    let collectibles_content = collectibles_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(collectibles_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"collectible_count\""));
+
+    let objective_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 23,
+        "method": "tools/call",
+        "params": {
+            "name": "game.create_objective_flow",
+            "arguments": {
+                "name_prefix": "MCP_Objective",
+                "steps": [
+                    {
+                        "id": "intro",
+                        "label": "Reach the street",
+                        "kind": "location",
+                        "location": [0.0, 0.0, 100.0]
+                    }
+                ]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(objective_response["result"]["isError"], false);
+    let objective_content = objective_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(objective_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"objective_count\""));
 }
 
 #[tokio::test]
