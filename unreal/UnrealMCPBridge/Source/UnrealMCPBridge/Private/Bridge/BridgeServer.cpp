@@ -4,11 +4,27 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Async/Async.h"
 #include "Common/TcpListener.h"
+#include "Components/DirectionalLightComponent.h"
+#include "Components/ExponentialHeightFogComponent.h"
+#include "Components/LightComponent.h"
+#include "Components/PointLightComponent.h"
+#include "Components/PostProcessComponent.h"
+#include "Components/RectLightComponent.h"
+#include "Components/SkyAtmosphereComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Containers/StringConv.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Editor.h"
+#include "Engine/DirectionalLight.h"
+#include "Engine/ExponentialHeightFog.h"
+#include "Engine/PointLight.h"
+#include "Engine/PostProcessVolume.h"
+#include "Engine/RectLight.h"
+#include "Engine/SkyLight.h"
+#include "Engine/SpotLight.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Texture2D.h"
@@ -322,6 +338,281 @@ TSharedRef<FJsonObject> MakeMaterialApplyResult(const TArray<TSharedPtr<FJsonVal
     ResultData->SetArrayField(TEXT("applied"), Applied);
     ResultData->SetNumberField(TEXT("count"), Applied.Num());
     return ResultData;
+}
+
+void AddChangedActor(TArray<FString>& Changed, const AActor& Actor)
+{
+    Changed.AddUnique(Actor.GetActorLabel());
+}
+
+TSharedRef<FJsonObject> MakeLightingOperationResult(const TArray<FString>& Changed)
+{
+    TArray<TSharedPtr<FJsonValue>> ChangedValues;
+    for (const FString& ActorName : Changed)
+    {
+        ChangedValues.Add(MakeStringValue(ActorName));
+    }
+
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("changed"), ChangedValues);
+    ResultData->SetNumberField(TEXT("count"), ChangedValues.Num());
+    return ResultData;
+}
+
+void AddLightSummary(TArray<TSharedPtr<FJsonValue>>& Lights, const AActor& Actor, const FString& Kind)
+{
+    TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+    Item->SetStringField(TEXT("name"), Actor.GetActorLabel());
+    Item->SetStringField(TEXT("path"), Actor.GetPathName());
+    Item->SetStringField(TEXT("kind"), Kind);
+    Lights.Add(MakeObjectValue(Item));
+}
+
+TSharedRef<FJsonObject> MakeBulkLightResult(const TArray<TSharedPtr<FJsonValue>>& Lights)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("lights"), Lights);
+    ResultData->SetNumberField(TEXT("count"), Lights.Num());
+    return ResultData;
+}
+
+void AddGeneratedLightingTags(AActor& Actor, const TArray<FString>& ExtraTags = TArray<FString>())
+{
+    Actor.Tags.AddUnique(TEXT("mcp.generated"));
+    Actor.Tags.AddUnique(TEXT("mcp.lighting"));
+    for (const FString& Tag : ExtraTags)
+    {
+        if (!Tag.IsEmpty())
+        {
+            Actor.Tags.AddUnique(FName(*Tag));
+        }
+    }
+}
+
+template <typename TActor>
+TActor* FindActorByLabel(UWorld& World, const FString& Label)
+{
+    for (TActorIterator<TActor> It(&World); It; ++It)
+    {
+        TActor* Actor = *It;
+        if (IsValid(Actor) && Actor->GetActorLabel() == Label)
+        {
+            return Actor;
+        }
+    }
+
+    return nullptr;
+}
+
+template <typename TActor>
+TActor* FindOrSpawnNamedActor(UWorld& World, const FString& Label, const FVector& Location, const FRotator& Rotation, bool& bOutCreated)
+{
+    bOutCreated = false;
+    if (TActor* Existing = FindActorByLabel<TActor>(World, Label))
+    {
+        return Existing;
+    }
+
+    FActorSpawnParameters SpawnParameters;
+    SpawnParameters.Name = MakeUniqueObjectName(&World, TActor::StaticClass(), FName(*Label));
+    TActor* Actor = World.SpawnActor<TActor>(Location, Rotation, SpawnParameters);
+    if (Actor)
+    {
+        Actor->SetActorLabel(Label);
+        AddGeneratedLightingTags(*Actor);
+        bOutCreated = true;
+    }
+
+    return Actor;
+}
+
+void ConfigureExclusiveDirectionalLight(UWorld& World, ADirectionalLight& ActiveLight)
+{
+    for (TActorIterator<ADirectionalLight> It(&World); It; ++It)
+    {
+        ADirectionalLight* DirectionalLight = *It;
+        if (!IsValid(DirectionalLight))
+        {
+            continue;
+        }
+
+        UDirectionalLightComponent* LightComponent = Cast<UDirectionalLightComponent>(DirectionalLight->GetLightComponent());
+        if (!LightComponent)
+        {
+            continue;
+        }
+
+        DirectionalLight->Modify();
+        LightComponent->Modify();
+        const bool bIsActive = DirectionalLight == &ActiveLight;
+        LightComponent->SetVisibility(bIsActive);
+        if (!bIsActive)
+        {
+            LightComponent->SetIntensity(0.0f);
+            DirectionalLight->Tags.AddUnique(TEXT("mcp.disabled_directional"));
+        }
+    }
+}
+
+ADirectionalLight* ConfigureDirectionalLight(
+    UWorld& World,
+    const FString& Label,
+    const FRotator& Rotation,
+    double Intensity,
+    const FLinearColor& Color,
+    TArray<FString>& Changed)
+{
+    bool bCreated = false;
+    ADirectionalLight* DirectionalLight =
+        FindOrSpawnNamedActor<ADirectionalLight>(World, Label, FVector::ZeroVector, Rotation, bCreated);
+    if (!DirectionalLight)
+    {
+        return nullptr;
+    }
+
+    DirectionalLight->Modify();
+    DirectionalLight->SetActorRotation(Rotation);
+    AddGeneratedLightingTags(*DirectionalLight);
+
+    if (UDirectionalLightComponent* LightComponent = Cast<UDirectionalLightComponent>(DirectionalLight->GetLightComponent()))
+    {
+        LightComponent->Modify();
+        LightComponent->SetVisibility(true);
+        LightComponent->SetIntensity(static_cast<float>(Intensity));
+        LightComponent->SetLightColor(Color);
+        LightComponent->MarkRenderStateDirty();
+    }
+
+    ConfigureExclusiveDirectionalLight(World, *DirectionalLight);
+    AddChangedActor(Changed, *DirectionalLight);
+    return DirectionalLight;
+}
+
+ASkyLight* ConfigureSkyLight(UWorld& World, double SkyIntensity, const FLinearColor& LowerHemisphereColor, TArray<FString>& Changed)
+{
+    bool bCreated = false;
+    ASkyLight* SkyLight = FindOrSpawnNamedActor<ASkyLight>(World, TEXT("MCP_SkyLight"), FVector::ZeroVector, FRotator::ZeroRotator, bCreated);
+    if (!SkyLight)
+    {
+        return nullptr;
+    }
+
+    SkyLight->Modify();
+    AddGeneratedLightingTags(*SkyLight);
+    if (USkyLightComponent* SkyComponent = SkyLight->GetLightComponent())
+    {
+        SkyComponent->Modify();
+        SkyComponent->SetVisibility(true);
+        SkyComponent->SetIntensity(static_cast<float>(SkyIntensity));
+        SkyComponent->SetLightColor(FLinearColor::White);
+        SkyComponent->bLowerHemisphereIsBlack = false;
+        SkyComponent->LowerHemisphereColor = LowerHemisphereColor;
+        SkyComponent->RecaptureSky();
+    }
+
+    AddChangedActor(Changed, *SkyLight);
+    return SkyLight;
+}
+
+ASkyAtmosphere* ConfigureSkyAtmosphere(UWorld& World, TArray<FString>& Changed)
+{
+    bool bCreated = false;
+    ASkyAtmosphere* Atmosphere =
+        FindOrSpawnNamedActor<ASkyAtmosphere>(World, TEXT("MCP_SkyAtmosphere"), FVector::ZeroVector, FRotator::ZeroRotator, bCreated);
+    if (!Atmosphere)
+    {
+        return nullptr;
+    }
+
+    Atmosphere->Modify();
+    AddGeneratedLightingTags(*Atmosphere);
+    AddChangedActor(Changed, *Atmosphere);
+    return Atmosphere;
+}
+
+AExponentialHeightFog* ConfigureFog(
+    UWorld& World,
+    double Density,
+    double HeightFalloff,
+    const FLinearColor& Color,
+    double StartDistance,
+    TArray<FString>& Changed)
+{
+    bool bCreated = false;
+    AExponentialHeightFog* Fog =
+        FindOrSpawnNamedActor<AExponentialHeightFog>(World, TEXT("MCP_NightFog"), FVector::ZeroVector, FRotator::ZeroRotator, bCreated);
+    if (!Fog)
+    {
+        return nullptr;
+    }
+
+    Fog->Modify();
+    AddGeneratedLightingTags(*Fog);
+    if (UExponentialHeightFogComponent* FogComponent = Fog->GetComponent())
+    {
+        FogComponent->Modify();
+        FogComponent->SetFogDensity(static_cast<float>(FMath::Max(Density, 0.0)));
+        FogComponent->SetFogHeightFalloff(static_cast<float>(FMath::Max(HeightFalloff, 0.0)));
+        FogComponent->SetFogInscatteringColor(Color);
+        FogComponent->StartDistance = static_cast<float>(FMath::Max(StartDistance, 0.0));
+        FogComponent->MarkRenderStateDirty();
+    }
+
+    AddChangedActor(Changed, *Fog);
+    return Fog;
+}
+
+APostProcessVolume* ConfigurePostProcess(
+    UWorld& World,
+    double ExposureCompensation,
+    double MinBrightness,
+    double MaxBrightness,
+    double BloomIntensity,
+    TArray<FString>& Changed)
+{
+    bool bCreated = false;
+    APostProcessVolume* Volume =
+        FindOrSpawnNamedActor<APostProcessVolume>(World, TEXT("MCP_PostProcess"), FVector::ZeroVector, FRotator::ZeroRotator, bCreated);
+    if (!Volume)
+    {
+        return nullptr;
+    }
+
+    Volume->Modify();
+    Volume->bUnbound = true;
+    AddGeneratedLightingTags(*Volume);
+    FPostProcessSettings& Settings = Volume->Settings;
+    Settings.bOverride_AutoExposureBias = true;
+    Settings.AutoExposureBias = static_cast<float>(ExposureCompensation);
+    Settings.bOverride_AutoExposureMinBrightness = true;
+    Settings.AutoExposureMinBrightness = static_cast<float>(FMath::Max(MinBrightness, 0.0));
+    Settings.bOverride_AutoExposureMaxBrightness = true;
+    Settings.AutoExposureMaxBrightness = static_cast<float>(FMath::Max(MaxBrightness, 0.0));
+    Settings.bOverride_BloomIntensity = true;
+    Settings.BloomIntensity = static_cast<float>(FMath::Max(BloomIntensity, 0.0));
+
+    AddChangedActor(Changed, *Volume);
+    return Volume;
+}
+
+bool IsLightActorKind(const AActor* Actor, const FString& Kind)
+{
+    if (Kind.Equals(TEXT("point"), ESearchCase::IgnoreCase))
+    {
+        return Cast<APointLight>(Actor) != nullptr;
+    }
+
+    if (Kind.Equals(TEXT("rect"), ESearchCase::IgnoreCase))
+    {
+        return Cast<ARectLight>(Actor) != nullptr;
+    }
+
+    if (Kind.Equals(TEXT("spot"), ESearchCase::IgnoreCase))
+    {
+        return Cast<ASpotLight>(Actor) != nullptr;
+    }
+
+    return false;
 }
 
 uint8 ColorChannelToByte(double Value)
@@ -923,6 +1214,12 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         CommandNames.Add(MakeStringValue(TEXT("material.set_parameters")));
         CommandNames.Add(MakeStringValue(TEXT("material.bulk_apply")));
         CommandNames.Add(MakeStringValue(TEXT("world.bulk_set_materials")));
+        CommandNames.Add(MakeStringValue(TEXT("lighting.set_night_scene")));
+        CommandNames.Add(MakeStringValue(TEXT("lighting.set_sky")));
+        CommandNames.Add(MakeStringValue(TEXT("lighting.set_fog")));
+        CommandNames.Add(MakeStringValue(TEXT("lighting.set_post_process")));
+        CommandNames.Add(MakeStringValue(TEXT("lighting.bulk_set_lights")));
+        CommandNames.Add(MakeStringValue(TEXT("lighting.set_time_of_day")));
 
         TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
         ResultData->SetArrayField(TEXT("commands"), CommandNames);
@@ -1542,6 +1839,306 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         ApplyMaterialToActors(*World, MaterialPath, Names, Tags, Slot, Applied);
         World->MarkPackageDirty();
         return MakeTaggedResult(TEXT("material_apply"), MakeMaterialApplyResult(Applied));
+    }
+
+    if (CommandType == TEXT("lighting_set_night_scene"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        FRotator MoonRotation = FRotator(-35.0, -25.0, 0.0);
+        FLinearColor MoonColor = FLinearColor(0.55f, 0.65f, 1.0f, 1.0f);
+        if (!ReadRotatorField(Data, TEXT("moon_rotation"), MoonRotation, MoonRotation) ||
+            !ReadColorField(Data, TEXT("moon_color"), MoonColor, MoonColor))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("lighting vectors must be fixed-size numeric arrays"));
+            return nullptr;
+        }
+
+        double MoonIntensity = 0.12;
+        double SkyIntensity = 0.05;
+        double FogDensity = 0.01;
+        double ExposureCompensation = -0.5;
+        Data->TryGetNumberField(TEXT("moon_intensity"), MoonIntensity);
+        Data->TryGetNumberField(TEXT("sky_intensity"), SkyIntensity);
+        Data->TryGetNumberField(TEXT("fog_density"), FogDensity);
+        Data->TryGetNumberField(TEXT("exposure_compensation"), ExposureCompensation);
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "SetNightLighting", "MCP Set Night Lighting"));
+        TArray<FString> Changed;
+        ConfigureDirectionalLight(*World, TEXT("MCP_MoonLight"), MoonRotation, MoonIntensity, MoonColor, Changed);
+        ConfigureSkyLight(*World, SkyIntensity, FLinearColor(0.01f, 0.012f, 0.018f, 1.0f), Changed);
+        ConfigureSkyAtmosphere(*World, Changed);
+        ConfigureFog(*World, FogDensity, 0.2, FLinearColor(0.08f, 0.1f, 0.16f, 1.0f), 0.0, Changed);
+        ConfigurePostProcess(*World, ExposureCompensation, 0.2, 1.0, 0.6, Changed);
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("lighting_operation"), MakeLightingOperationResult(Changed));
+    }
+
+    if (CommandType == TEXT("lighting_set_sky"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        double SkyIntensity = 0.05;
+        FLinearColor LowerHemisphereColor = FLinearColor(0.01f, 0.012f, 0.018f, 1.0f);
+        Data->TryGetNumberField(TEXT("sky_intensity"), SkyIntensity);
+        if (!ReadColorField(Data, TEXT("lower_hemisphere_color"), LowerHemisphereColor, LowerHemisphereColor))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("lower_hemisphere_color must be an array of 4 numbers"));
+            return nullptr;
+        }
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "SetSkyLighting", "MCP Set Sky Lighting"));
+        TArray<FString> Changed;
+        ConfigureSkyLight(*World, SkyIntensity, LowerHemisphereColor, Changed);
+        ConfigureSkyAtmosphere(*World, Changed);
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("lighting_operation"), MakeLightingOperationResult(Changed));
+    }
+
+    if (CommandType == TEXT("lighting_set_fog"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        double Density = 0.01;
+        double HeightFalloff = 0.2;
+        double StartDistance = 0.0;
+        FLinearColor Color = FLinearColor(0.08f, 0.1f, 0.16f, 1.0f);
+        Data->TryGetNumberField(TEXT("density"), Density);
+        Data->TryGetNumberField(TEXT("height_falloff"), HeightFalloff);
+        Data->TryGetNumberField(TEXT("start_distance"), StartDistance);
+        if (!ReadColorField(Data, TEXT("color"), Color, Color))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("fog color must be an array of 4 numbers"));
+            return nullptr;
+        }
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "SetFogLighting", "MCP Set Fog Lighting"));
+        TArray<FString> Changed;
+        ConfigureFog(*World, Density, HeightFalloff, Color, StartDistance, Changed);
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("lighting_operation"), MakeLightingOperationResult(Changed));
+    }
+
+    if (CommandType == TEXT("lighting_set_post_process"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        double ExposureCompensation = -0.5;
+        double MinBrightness = 0.2;
+        double MaxBrightness = 1.0;
+        double BloomIntensity = 0.6;
+        Data->TryGetNumberField(TEXT("exposure_compensation"), ExposureCompensation);
+        Data->TryGetNumberField(TEXT("min_brightness"), MinBrightness);
+        Data->TryGetNumberField(TEXT("max_brightness"), MaxBrightness);
+        Data->TryGetNumberField(TEXT("bloom_intensity"), BloomIntensity);
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "SetPostProcessLighting", "MCP Set Post Process Lighting"));
+        TArray<FString> Changed;
+        ConfigurePostProcess(*World, ExposureCompensation, MinBrightness, MaxBrightness, BloomIntensity, Changed);
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("lighting_operation"), MakeLightingOperationResult(Changed));
+    }
+
+    if (CommandType == TEXT("lighting_bulk_set_lights"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        const TArray<TSharedPtr<FJsonValue>>* LightSpecs = nullptr;
+        if (!Data->TryGetArrayField(TEXT("lights"), LightSpecs))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("lighting.bulk_set_lights requires data.lights"));
+            return nullptr;
+        }
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "BulkSetLights", "MCP Bulk Set Lights"));
+        TArray<TSharedPtr<FJsonValue>> Lights;
+        for (const TSharedPtr<FJsonValue>& LightValue : *LightSpecs)
+        {
+            const TSharedPtr<FJsonObject>* LightSpec = nullptr;
+            if (!LightValue.IsValid() || !LightValue->TryGetObject(LightSpec) || LightSpec == nullptr || !LightSpec->IsValid())
+            {
+                continue;
+            }
+
+            FString Name;
+            (*LightSpec)->TryGetStringField(TEXT("name"), Name);
+            if (Name.IsEmpty())
+            {
+                continue;
+            }
+
+            FString Kind = TEXT("point");
+            (*LightSpec)->TryGetStringField(TEXT("kind"), Kind);
+            Kind.ToLowerInline();
+            if (!Kind.Equals(TEXT("point")) && !Kind.Equals(TEXT("rect")) && !Kind.Equals(TEXT("spot")))
+            {
+                continue;
+            }
+
+            TSharedPtr<FJsonObject> TransformSpec = *LightSpec;
+            const TSharedPtr<FJsonObject>* NestedTransform = nullptr;
+            if ((*LightSpec)->TryGetObjectField(TEXT("transform"), NestedTransform) && NestedTransform != nullptr &&
+                NestedTransform->IsValid())
+            {
+                TransformSpec = *NestedTransform;
+            }
+
+            FVector Location = FVector::ZeroVector;
+            FRotator Rotation = FRotator::ZeroRotator;
+            FVector Scale = FVector(1.0, 1.0, 1.0);
+            FLinearColor Color = FLinearColor(1.0f, 0.82f, 0.55f, 1.0f);
+            if (!ReadVectorField(TransformSpec, TEXT("location"), FVector::ZeroVector, Location) ||
+                !ReadRotatorField(TransformSpec, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
+                !ReadVectorField(TransformSpec, TEXT("scale"), FVector(1.0, 1.0, 1.0), Scale) ||
+                !ReadColorField(*LightSpec, TEXT("color"), Color, Color))
+            {
+                continue;
+            }
+
+            AActor* ExistingActor = FindActorByLabel<AActor>(*World, Name);
+            if (ExistingActor && !IsLightActorKind(ExistingActor, Kind))
+            {
+                if (ExistingActor->ActorHasTag(TEXT("mcp.lighting")) || ExistingActor->ActorHasTag(TEXT("mcp.generated")))
+                {
+                    World->EditorDestroyActor(ExistingActor, true);
+                }
+                else
+                {
+                    continue;
+                }
+            }
+
+            double Intensity = 5000.0;
+            double AttenuationRadius = 1000.0;
+            double SourceRadius = 24.0;
+            double SourceWidth = 64.0;
+            double SourceHeight = 32.0;
+            (*LightSpec)->TryGetNumberField(TEXT("intensity"), Intensity);
+            (*LightSpec)->TryGetNumberField(TEXT("attenuation_radius"), AttenuationRadius);
+            (*LightSpec)->TryGetNumberField(TEXT("source_radius"), SourceRadius);
+            (*LightSpec)->TryGetNumberField(TEXT("source_width"), SourceWidth);
+            (*LightSpec)->TryGetNumberField(TEXT("source_height"), SourceHeight);
+
+            const TArray<FString> ExtraTags = ReadStringArrayField(*LightSpec, TEXT("tags"));
+            AActor* Actor = nullptr;
+            ULightComponent* LightComponent = nullptr;
+
+            if (Kind.Equals(TEXT("rect")))
+            {
+                bool bCreated = false;
+                ARectLight* RectLight = FindOrSpawnNamedActor<ARectLight>(*World, Name, Location, Rotation, bCreated);
+                Actor = RectLight;
+                LightComponent = RectLight ? RectLight->GetLightComponent() : nullptr;
+                if (URectLightComponent* RectComponent = Cast<URectLightComponent>(LightComponent))
+                {
+                    RectComponent->SetAttenuationRadius(static_cast<float>(FMath::Max(AttenuationRadius, 0.0)));
+                    RectComponent->SetSourceWidth(static_cast<float>(FMath::Max(SourceWidth, 0.0)));
+                    RectComponent->SetSourceHeight(static_cast<float>(FMath::Max(SourceHeight, 0.0)));
+                }
+            }
+            else if (Kind.Equals(TEXT("spot")))
+            {
+                bool bCreated = false;
+                ASpotLight* SpotLight = FindOrSpawnNamedActor<ASpotLight>(*World, Name, Location, Rotation, bCreated);
+                Actor = SpotLight;
+                LightComponent = SpotLight ? SpotLight->GetLightComponent() : nullptr;
+                if (USpotLightComponent* SpotComponent = Cast<USpotLightComponent>(LightComponent))
+                {
+                    SpotComponent->SetAttenuationRadius(static_cast<float>(FMath::Max(AttenuationRadius, 0.0)));
+                    SpotComponent->SetSourceRadius(static_cast<float>(FMath::Max(SourceRadius, 0.0)));
+                }
+            }
+            else
+            {
+                bool bCreated = false;
+                APointLight* PointLight = FindOrSpawnNamedActor<APointLight>(*World, Name, Location, Rotation, bCreated);
+                Actor = PointLight;
+                LightComponent = PointLight ? PointLight->GetLightComponent() : nullptr;
+                if (UPointLightComponent* PointComponent = Cast<UPointLightComponent>(LightComponent))
+                {
+                    PointComponent->SetAttenuationRadius(static_cast<float>(FMath::Max(AttenuationRadius, 0.0)));
+                    PointComponent->SetSourceRadius(static_cast<float>(FMath::Max(SourceRadius, 0.0)));
+                }
+            }
+
+            if (!Actor || !LightComponent)
+            {
+                continue;
+            }
+
+            Actor->Modify();
+            Actor->SetActorLocationAndRotation(Location, Rotation);
+            Actor->SetActorScale3D(Scale);
+            AddGeneratedLightingTags(*Actor, ExtraTags);
+            if (USceneComponent* RootComponent = Actor->GetRootComponent())
+            {
+                RootComponent->SetMobility(EComponentMobility::Movable);
+            }
+
+            LightComponent->Modify();
+            LightComponent->SetVisibility(true);
+            LightComponent->SetMobility(EComponentMobility::Movable);
+            LightComponent->SetIntensity(static_cast<float>(FMath::Max(Intensity, 0.0)));
+            LightComponent->SetLightColor(Color);
+            LightComponent->MarkRenderStateDirty();
+            AddLightSummary(Lights, *Actor, Kind);
+        }
+
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("lighting_bulk_set_lights"), MakeBulkLightResult(Lights));
+    }
+
+    if (CommandType == TEXT("lighting_set_time_of_day"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        FRotator SunRotation = FRotator(-10.0, 110.0, 0.0);
+        FLinearColor SunColor = FLinearColor(1.0f, 0.93f, 0.82f, 1.0f);
+        if (!ReadRotatorField(Data, TEXT("sun_rotation"), SunRotation, SunRotation) ||
+            !ReadColorField(Data, TEXT("sun_color"), SunColor, SunColor))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("lighting vectors must be fixed-size numeric arrays"));
+            return nullptr;
+        }
+
+        double SunIntensity = 1.0;
+        Data->TryGetNumberField(TEXT("sun_intensity"), SunIntensity);
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "SetTimeOfDayLighting", "MCP Set Time Of Day Lighting"));
+        TArray<FString> Changed;
+        ConfigureDirectionalLight(*World, TEXT("MCP_SunLight"), SunRotation, SunIntensity, SunColor, Changed);
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("lighting_operation"), MakeLightingOperationResult(Changed));
     }
 
     return nullptr;
