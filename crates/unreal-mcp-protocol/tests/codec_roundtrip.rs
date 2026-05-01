@@ -7,13 +7,13 @@ use unreal_mcp_protocol::{
     GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec, GridPlacementSpec,
     IndexedError, LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint,
     LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightComponentSpec, LightSpec,
-    LightSummary, LightingOperation, MaterialAppliedActor, MaterialApplyResult,
-    MaterialAssignment, MaterialOperation, MaterialParameter, MaterialParameterOperation,
-    PlacementSnapActor, PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation,
-    ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode, RoadNetworkSpec,
-    RuntimeAnimationOperation, RuntimeAnimationSpec, SceneAssemblyResult, SpawnedActor,
-    StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation,
-    StaticMeshOperationResult, TextureCreateSpec, Transform, WorldQueryResult,
+    LightSummary, LightingOperation, MaterialAppliedActor, MaterialApplyResult, MaterialAssignment,
+    MaterialOperation, MaterialParameter, MaterialParameterOperation, PlacementSnapActor,
+    PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation, ProtocolError,
+    RequestEnvelope, ResponseEnvelope, ResponseMode, RoadNetworkSpec, RuntimeAnimationOperation,
+    RuntimeAnimationSpec, SceneAssemblyResult, SpawnedActor, StaticMeshCollisionSpec,
+    StaticMeshComponentSpec, StaticMeshOperation, StaticMeshOperationResult, TextureCreateSpec,
+    Transform, WorldQueryResult,
 };
 
 #[test]
