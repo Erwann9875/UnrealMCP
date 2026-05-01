@@ -274,6 +274,95 @@ mesh assets in one request.
 }
 ```
 
+## `road.create_network`
+
+Creates a grid road network from static mesh actors in one bridge request.
+Road actors are tagged with `mcp.scene_actor:road` plus optional scene/group
+tags.
+
+```json
+{
+  "name_prefix": "MCP_DTLA_Road",
+  "scene": "la",
+  "group": "downtown_roads",
+  "origin": [0.0, 0.0, 0.0],
+  "rows": 3,
+  "columns": 4,
+  "block_size": [2400.0, 1800.0],
+  "road_width": 320.0,
+  "road_thickness": 20.0,
+  "road_mesh": "/Engine/BasicShapes/Cube.Cube"
+}
+```
+
+## `scene.bulk_place_on_grid`
+
+Places repeated static mesh actors on a deterministic centered grid. Use this
+for lots, props, towers, lamps, or other repeated scene parts without sending
+one spawn entry per actor.
+
+```json
+{
+  "name_prefix": "MCP_DTLA_Tower",
+  "mesh": "/Game/MCP/Meshes/SM_DTLA_Tower_A",
+  "scene": "la",
+  "group": "downtown_buildings",
+  "origin": [0.0, 0.0, 0.0],
+  "rows": 4,
+  "columns": 5,
+  "spacing": [600.0, 650.0],
+  "rotation": [0.0, 0.0, 0.0],
+  "scale": [1.0, 1.0, 1.0],
+  "yaw_variation": 12.0,
+  "scale_variation": 0.2,
+  "seed": 42
+}
+```
+
+## `scene.create_city_block`
+
+Creates one city block with four roads, optional sidewalks, and a building
+grid. Roads and sidewalks default to `/Engine/BasicShapes/Cube.Cube`; buildings
+use the supplied mesh.
+
+```json
+{
+  "name_prefix": "MCP_DTLA_Block_A",
+  "scene": "la",
+  "group": "downtown_block_a",
+  "origin": [0.0, 0.0, 0.0],
+  "size": [2400.0, 1800.0],
+  "road_width": 320.0,
+  "sidewalk_width": 180.0,
+  "building_mesh": "/Game/MCP/Meshes/SM_DTLA_Tower_A",
+  "building_rows": 2,
+  "building_columns": 3,
+  "building_scale": [2.0, 2.0, 8.0],
+  "seed": 7
+}
+```
+
+## `scene.create_district`
+
+Creates a preset multi-block district with a road network and deterministic
+building placement. Supported presets are `downtown`, `residential`,
+`industrial`, `beach`, and `hills`.
+
+```json
+{
+  "name_prefix": "MCP_DTLA",
+  "preset": "downtown",
+  "scene": "la",
+  "group": "downtown",
+  "origin": [0.0, 0.0, 0.0],
+  "blocks": [3, 2],
+  "block_size": [2400.0, 1800.0],
+  "road_width": 320.0,
+  "building_mesh": "/Game/MCP/Meshes/SM_DTLA_Tower_A",
+  "seed": 99
+}
+```
+
 ## `material.create`
 
 Creates a simple Unreal material asset with parameter nodes wired to common PBR
