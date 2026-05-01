@@ -7,6 +7,10 @@ stdio JSON-RPC dispatch. It supports `initialize`, `tools/list`, and
 The Rust server connects to the Unreal bridge at `UNREAL_MCP_BRIDGE_ADDR`, or
 `127.0.0.1:55557` when the environment variable is not set.
 
+The bridge body format is selected with `UNREAL_MCP_BRIDGE_FORMAT`. Use
+`json` for the current Unreal plugin bootstrap. `msgpack` remains the default
+for the optimized bridge path and Rust fake-bridge tests.
+
 ## `connection.ping`
 
 Checks whether the Unreal bridge responds.
