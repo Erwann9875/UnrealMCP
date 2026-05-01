@@ -9,12 +9,13 @@ pub use codec::{
 };
 pub use commands::{
     ActorQuery, ActorSpawnSpec, AssetOperation, BlueprintComponentOperation, BlueprintOperation,
-    BridgeStatus, Command, CommandResult, LevelInfo, LevelList, LevelOperation, LightComponentSpec,
-    LightSpec, LightSummary, LightingOperation, MaterialAppliedActor, MaterialApplyResult,
-    MaterialAssignment, MaterialOperation, MaterialParameter, MaterialParameterOperation,
-    MaterialParameterValue, ProceduralTextureOperation, RuntimeAnimationOperation,
-    RuntimeAnimationSpec, SpawnedActor, StaticMeshComponentSpec, TextureCreateSpec, Transform,
-    WorldQueryResult,
+    BridgeStatus, Command, CommandResult, LandscapeCreateSpec, LandscapeHeightPatch,
+    LandscapeLayerPaint, LandscapeOperation, LevelInfo, LevelList, LevelOperation,
+    LightComponentSpec, LightSpec, LightSummary, LightingOperation, MaterialAppliedActor,
+    MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
+    MaterialParameterOperation, MaterialParameterValue, PlacementSnapActor, PlacementSnapResult,
+    PlacementSnapSpec, ProceduralTextureOperation, RuntimeAnimationOperation, RuntimeAnimationSpec,
+    SpawnedActor, StaticMeshComponentSpec, TextureCreateSpec, Transform, WorldQueryResult,
 };
 pub use envelope::{ErrorMode, IndexedError, RequestEnvelope, ResponseEnvelope, ResponseMode};
 pub use error::{ProtocolError, ProtocolResult};

@@ -103,6 +103,18 @@ pub enum Command {
         sun_intensity: f64,
         sun_color: [f64; 4],
     },
+    LandscapeCreate {
+        spec: LandscapeCreateSpec,
+    },
+    LandscapeSetHeightfield {
+        patch: LandscapeHeightPatch,
+    },
+    LandscapePaintLayers {
+        paint: LandscapeLayerPaint,
+    },
+    PlacementBulkSnapToGround {
+        spec: PlacementSnapSpec,
+    },
     BlueprintCreateActor {
         path: String,
         parent_class: String,
@@ -315,6 +327,48 @@ pub struct RuntimeAnimationSpec {
     pub phase_offset: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LandscapeCreateSpec {
+    pub name: String,
+    pub component_count: [u32; 2],
+    pub section_size: u32,
+    pub sections_per_component: u32,
+    pub location: [f64; 3],
+    pub scale: [f64; 3],
+    pub material: Option<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LandscapeHeightPatch {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub base_height: f64,
+    pub amplitude: f64,
+    pub frequency: f64,
+    pub seed: u32,
+    pub city_pad_radius: f64,
+    pub city_pad_falloff: f64,
+    pub samples: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LandscapeLayerPaint {
+    pub name: String,
+    pub material: Option<String>,
+    pub layers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementSnapSpec {
+    pub names: Vec<String>,
+    pub tags: Vec<String>,
+    pub include_generated: bool,
+    pub trace_distance: f64,
+    pub offset_z: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetOperation {
     pub path: String,
@@ -392,6 +446,29 @@ pub struct RuntimeAnimationOperation {
     pub count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandscapeOperation {
+    pub name: String,
+    pub path: String,
+    pub component_count: [u32; 2],
+    pub vertex_count: [u32; 2],
+    pub changed: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementSnapActor {
+    pub name: String,
+    pub path: String,
+    pub old_location: [f64; 3],
+    pub new_location: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementSnapResult {
+    pub actors: Vec<PlacementSnapActor>,
+    pub count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "data")]
 pub enum CommandResult {
@@ -427,6 +504,8 @@ pub enum CommandResult {
         lights: Vec<LightSummary>,
         count: usize,
     },
+    LandscapeOperation(LandscapeOperation),
+    PlacementSnap(PlacementSnapResult),
     BlueprintOperation(BlueprintOperation),
     BlueprintComponentOperation(BlueprintComponentOperation),
     RuntimeAnimationOperation(RuntimeAnimationOperation),

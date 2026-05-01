@@ -1,11 +1,13 @@
 use unreal_mcp_protocol::{
     ActorQuery, ActorSpawnSpec, AssetOperation, BlueprintComponentOperation, BlueprintOperation,
     Command, CommandResult, ErrorMode, IndexedError, LevelInfo, LevelList, LevelOperation,
+    LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint, LandscapeOperation,
     LightComponentSpec, LightSpec, LightSummary, LightingOperation, MaterialAppliedActor,
     MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
-    MaterialParameterOperation, ProceduralTextureOperation, ProtocolError, RequestEnvelope,
-    ResponseEnvelope, ResponseMode, RuntimeAnimationOperation, RuntimeAnimationSpec, SpawnedActor,
-    StaticMeshComponentSpec, TextureCreateSpec, Transform, WorldQueryResult,
+    MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult, PlacementSnapSpec,
+    ProceduralTextureOperation, ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode,
+    RuntimeAnimationOperation, RuntimeAnimationSpec, SpawnedActor, StaticMeshComponentSpec,
+    TextureCreateSpec, Transform, WorldQueryResult,
 };
 
 #[test]
@@ -518,6 +520,95 @@ fn runtime_blueprint_results_roundtrip_preserve_payloads() {
             CommandResult::RuntimeAnimationOperation(RuntimeAnimationOperation {
                 path: Some("/Game/MCP/Runtime/DA_LED_Pulse".to_string()),
                 attached: vec!["MCP_LED_Tower_001".to_string()],
+                count: 1,
+            }),
+        ],
+    );
+
+    let text = encode_json_response(&response).expect("encode response");
+    let decoded = decode_json_response(&text).expect("decode response");
+
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn landscape_grounding_requests_roundtrip_preserve_payloads() {
+    let request = RequestEnvelope::new(
+        62,
+        ResponseMode::Summary,
+        ErrorMode::Stop,
+        vec![
+            Command::LandscapeCreate {
+                spec: LandscapeCreateSpec {
+                    name: "MCP_Landscape".to_string(),
+                    component_count: [4, 4],
+                    section_size: 63,
+                    sections_per_component: 1,
+                    location: [0.0, 0.0, 0.0],
+                    scale: [100.0, 100.0, 100.0],
+                    material: Some("/Game/MCP/Materials/M_Ground".to_string()),
+                    tags: vec!["mcp.scene:grounding".to_string()],
+                },
+            },
+            Command::LandscapeSetHeightfield {
+                patch: LandscapeHeightPatch {
+                    name: "MCP_Landscape".to_string(),
+                    width: 253,
+                    height: 253,
+                    base_height: 0.0,
+                    amplitude: 1200.0,
+                    frequency: 2.0,
+                    seed: 1234,
+                    city_pad_radius: 6500.0,
+                    city_pad_falloff: 1500.0,
+                    samples: vec![0.0, 0.25, -0.25, 0.5],
+                },
+            },
+            Command::LandscapePaintLayers {
+                paint: LandscapeLayerPaint {
+                    name: "MCP_Landscape".to_string(),
+                    material: Some("/Game/MCP/Materials/M_Ground".to_string()),
+                    layers: vec!["Concrete".to_string(), "Hills".to_string()],
+                },
+            },
+            Command::PlacementBulkSnapToGround {
+                spec: PlacementSnapSpec {
+                    names: vec!["MCP_Test_Cube".to_string()],
+                    tags: vec!["mcp.group:buildings".to_string()],
+                    include_generated: true,
+                    trace_distance: 20000.0,
+                    offset_z: 50.0,
+                },
+            },
+        ],
+    );
+
+    let bytes = encode_msgpack_request(&request).expect("encode request");
+    let decoded = decode_msgpack_request(&bytes).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn landscape_grounding_results_roundtrip_preserve_payloads() {
+    let response = ResponseEnvelope::success(
+        63,
+        12,
+        vec![
+            CommandResult::LandscapeOperation(LandscapeOperation {
+                name: "MCP_Landscape".to_string(),
+                path: "PersistentLevel.MCP_Landscape".to_string(),
+                component_count: [4, 4],
+                vertex_count: [253, 253],
+                changed: vec!["created".to_string(), "heightfield".to_string()],
+            }),
+            CommandResult::PlacementSnap(PlacementSnapResult {
+                actors: vec![PlacementSnapActor {
+                    name: "MCP_Test_Cube".to_string(),
+                    path: "PersistentLevel.MCP_Test_Cube".to_string(),
+                    old_location: [0.0, 0.0, 500.0],
+                    new_location: [0.0, 0.0, 50.0],
+                }],
                 count: 1,
             }),
         ],
