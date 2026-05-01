@@ -20,6 +20,8 @@ public class UnrealMCPBridge : ModuleRules
             "BlueprintGraph",
             "EditorSubsystem",
             "Foliage",
+            "ImageCore",
+            "ImageWrapper",
             "Json",
             "JsonUtilities",
             "KismetCompiler",

@@ -38,6 +38,7 @@
 #include "EngineUtils.h"
 #include "Factories/MaterialFactoryNew.h"
 #include "FileHelpers.h"
+#include "IImageWrapperModule.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -65,6 +66,7 @@
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 #include "ScopedTransaction.h"
+#include "UObject/SavePackage.h"
 #include "Runtime/UnrealMCPRuntimeAnimationPreset.h"
 #include "Runtime/UnrealMCPRuntimeAnimatorComponent.h"
 #include "StaticMeshAttributes.h"
@@ -983,6 +985,86 @@ bool BuildSignMeshDescription(
     return true;
 }
 
+UTexture2D* ImportTextureAssetDirect(
+    const FString& SourceFile,
+    const FString& DestinationPath,
+    bool bReplaceExisting,
+    bool bSRGB,
+    bool& bOutCreated,
+    FString& OutError)
+{
+    FString PackagePath;
+    FString AssetName;
+    if (!SplitAssetPath(DestinationPath, PackagePath, AssetName, OutError))
+    {
+        return nullptr;
+    }
+
+    TArray64<uint8> CompressedData;
+    if (!FFileHelper::LoadFileToArray(CompressedData, *SourceFile))
+    {
+        OutError = FString::Printf(TEXT("failed to read texture file '%s'"), *SourceFile);
+        return nullptr;
+    }
+
+    FImage Image;
+    IImageWrapperModule& ImageWrapperModule =
+        FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+    if (!ImageWrapperModule.DecompressImage(CompressedData.GetData(), CompressedData.Num(), Image) ||
+        Image.SizeX <= 0 ||
+        Image.SizeY <= 0)
+    {
+        OutError = FString::Printf(TEXT("failed to decode texture file '%s'"), *SourceFile);
+        return nullptr;
+    }
+    Image.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::sRGB);
+
+    bOutCreated = false;
+    UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, *ToObjectPath(DestinationPath));
+    if (!Texture)
+    {
+        UObject* ExistingObject = StaticFindObject(UObject::StaticClass(), nullptr, *ToObjectPath(DestinationPath));
+        if (ExistingObject)
+        {
+            OutError = FString::Printf(TEXT("asset '%s' exists but is not a Texture2D"), *DestinationPath);
+            return nullptr;
+        }
+
+        UPackage* Package = CreatePackage(*(PackagePath / AssetName));
+        Texture = NewObject<UTexture2D>(Package, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
+        bOutCreated = true;
+    }
+    else if (!bReplaceExisting)
+    {
+        OutError = TEXT("asset already exists");
+        return nullptr;
+    }
+
+    if (!Texture)
+    {
+        OutError = FString::Printf(TEXT("failed to create texture '%s'"), *DestinationPath);
+        return nullptr;
+    }
+
+    Texture->Modify();
+    Texture->Source.Init(Image.SizeX, Image.SizeY, 1, 1, TSF_BGRA8, Image.RawData.GetData());
+    Texture->SRGB = bSRGB;
+    Texture->MipGenSettings = TMGS_FromTextureGroup;
+    Texture->CompressionSettings = TC_Default;
+    Texture->PostEditChange();
+    Texture->MarkPackageDirty();
+    if (UPackage* Package = Texture->GetOutermost())
+    {
+        Package->MarkPackageDirty();
+    }
+    if (bOutCreated)
+    {
+        FAssetRegistryModule::AssetCreated(Texture);
+    }
+
+    return Texture;
+}
+
 bool ImportAssetFromSpec(
     const TSharedPtr<FJsonObject>& SpecData,
     const FString& ForcedKind,
@@ -1036,6 +1118,38 @@ bool ImportAssetFromSpec(
     if (ExistingAsset && !bReplaceExisting)
     {
         AddAssetImportOperation(Assets, SourceFile, DestinationPath, ExistingAsset->GetClass()->GetName(), false, TEXT("asset already exists"));
+        return true;
+    }
+
+    if (Kind == TEXT("texture"))
+    {
+        bool bSRGB = true;
+        SpecData->TryGetBoolField(TEXT("srgb"), bSRGB);
+        bool bCreated = false;
+        FString TextureError;
+        UTexture2D* Texture = ImportTextureAssetDirect(SourceFile, DestinationPath, bReplaceExisting, bSRGB, bCreated, TextureError);
+        if (!Texture)
+        {
+            AddAssetImportOperation(Assets, SourceFile, DestinationPath, FString(), false, TextureError);
+            return true;
+        }
+        if (bSave)
+        {
+            UPackage* TexturePackage = Texture->GetOutermost();
+            const FString PackageFilename = FPackageName::LongPackageNameToFilename(
+                TexturePackage->GetName(),
+                FPackageName::GetAssetPackageExtension());
+            FSavePackageArgs SaveArgs;
+            SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+            SaveArgs.SaveFlags = SAVE_NoError;
+            if (!UPackage::SavePackage(TexturePackage, Texture, *PackageFilename, SaveArgs))
+            {
+                AddAssetImportOperation(Assets, SourceFile, DestinationPath, Texture->GetClass()->GetName(), false, TEXT("failed to save texture package"));
+                return true;
+            }
+        }
+
+        AddAssetImportOperation(Assets, SourceFile, DestinationPath, Texture->GetClass()->GetName(), true, FString());
         return true;
     }
 
