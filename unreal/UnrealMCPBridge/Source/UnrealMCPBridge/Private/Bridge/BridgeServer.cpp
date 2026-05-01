@@ -67,7 +67,7 @@ FBridgeServer::~FBridgeServer()
 
 bool FBridgeServer::Start()
 {
-    if (bRunning)
+    if (bRunning.load(std::memory_order_acquire))
     {
         return true;
     }
@@ -87,19 +87,17 @@ bool FBridgeServer::Start()
         return false;
     }
 
-    bRunning = true;
+    bRunning.store(true, std::memory_order_release);
     UE_LOG(LogUnrealMCPBridgeServer, Display, TEXT("Unreal MCP bridge listening on %s."), *Endpoint.ToString());
     return true;
 }
 
 void FBridgeServer::Stop()
 {
-    if (!bRunning)
+    if (!bRunning.exchange(false, std::memory_order_acq_rel))
     {
         return;
     }
-
-    bRunning = false;
 
     if (Listener)
     {
@@ -112,7 +110,7 @@ void FBridgeServer::Stop()
 
 bool FBridgeServer::IsRunning() const
 {
-    return bRunning;
+    return bRunning.load(std::memory_order_acquire);
 }
 
 bool FBridgeServer::HandleAcceptedConnection(FSocket* ClientSocket, const FIPv4Endpoint& RemoteEndpoint)
@@ -193,7 +191,7 @@ void FBridgeServer::HandleConnection(FSocket& ClientSocket)
 bool FBridgeServer::ReadExact(FSocket& ClientSocket, uint8* Destination, int32 BytesToRead) const
 {
     int32 TotalBytesRead = 0;
-    while (TotalBytesRead < BytesToRead && bRunning)
+    while (TotalBytesRead < BytesToRead && bRunning.load(std::memory_order_acquire))
     {
         if (!ClientSocket.Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromSeconds(SocketWaitSeconds)))
         {
@@ -215,7 +213,7 @@ bool FBridgeServer::ReadExact(FSocket& ClientSocket, uint8* Destination, int32 B
 bool FBridgeServer::WriteExact(FSocket& ClientSocket, const uint8* Source, int32 BytesToWrite) const
 {
     int32 TotalBytesWritten = 0;
-    while (TotalBytesWritten < BytesToWrite && bRunning)
+    while (TotalBytesWritten < BytesToWrite && bRunning.load(std::memory_order_acquire))
     {
         if (!ClientSocket.Wait(ESocketWaitConditions::WaitForWrite, FTimespan::FromSeconds(SocketWaitSeconds)))
         {
@@ -329,7 +327,7 @@ bool FBridgeServer::BuildResponse(const FString& RequestJson, FString& OutRespon
         else if (CommandType == TEXT("status"))
         {
             TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
-            Data->SetBoolField(TEXT("connected"), bRunning);
+            Data->SetBoolField(TEXT("connected"), bRunning.load(std::memory_order_acquire));
             Data->SetStringField(TEXT("bridge_version"), BridgeVersion);
             Data->SetStringField(TEXT("unreal_version"), FEngineVersion::Current().ToString());
 

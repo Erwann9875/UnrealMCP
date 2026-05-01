@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 
+#include <atomic>
+
 class FSocket;
 class FTcpListener;
 class FJsonObject;
@@ -39,5 +41,5 @@ private:
 
 private:
     TUniquePtr<FTcpListener> Listener;
-    bool bRunning;
+    std::atomic_bool bRunning;
 };
