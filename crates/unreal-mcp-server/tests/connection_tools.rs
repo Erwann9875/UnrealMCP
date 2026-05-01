@@ -5,10 +5,10 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use unreal_mcp_protocol::{
-    encode_msgpack_response, BridgeStatus, Command, CommandResult, ErrorMode, RequestEnvelope,
-    ResponseEnvelope, ResponseMode,
+    decode_json_request, encode_json_response, encode_msgpack_response, BridgeStatus, Command,
+    CommandResult, ErrorMode, RequestEnvelope, ResponseEnvelope, ResponseMode,
 };
-use unreal_mcp_server::{BridgeClient, ConnectionTools, ToolResponse};
+use unreal_mcp_server::{BridgeClient, BridgeFormat, ConnectionTools, ToolResponse};
 use unreal_mcp_tests::start_fake_bridge;
 
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -34,6 +34,31 @@ async fn bridge_client_sends_ping_and_receives_pong() {
         &response.results[0],
         CommandResult::Pong { bridge_version } if bridge_version == "fake-0.1.0"
     ));
+}
+
+#[tokio::test]
+async fn bridge_client_sends_json_ping_and_receives_pong() {
+    let (address, bridge_task) = start_single_json_response_bridge().await.expect("json bridge");
+    let client = BridgeClient::with_format(address, BridgeFormat::Json);
+
+    let response = client
+        .send(RequestEnvelope::new(
+            77,
+            ResponseMode::Summary,
+            ErrorMode::Stop,
+            vec![Command::Ping],
+        ))
+        .await
+        .expect("json bridge response");
+
+    assert!(response.ok);
+    assert_eq!(response.request_id, 77);
+    assert!(matches!(
+        &response.results[0],
+        CommandResult::Pong { bridge_version } if bridge_version == "json-fake-0.1.0"
+    ));
+
+    bridge_task.await.expect("json bridge task");
 }
 
 #[tokio::test]
@@ -273,6 +298,51 @@ async fn bridge_client_times_out_when_bridge_stalls() {
 
     bridge_task.abort();
     let _ = bridge_task.await;
+}
+
+async fn start_single_json_response_bridge() -> anyhow::Result<(String, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?.to_string();
+
+    let bridge_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept json connection");
+        let mut request_len = [0_u8; 4];
+        stream
+            .read_exact(&mut request_len)
+            .await
+            .expect("read json request length");
+        let request_len = u32::from_be_bytes(request_len) as usize;
+        let mut request_body = vec![0_u8; request_len];
+        stream
+            .read_exact(&mut request_body)
+            .await
+            .expect("read json request body");
+
+        let request_text = std::str::from_utf8(&request_body).expect("request is UTF-8");
+        let request = decode_json_request(request_text).expect("decode json request");
+        assert_eq!(request.commands, vec![Command::Ping]);
+
+        let response = ResponseEnvelope::success(
+            request.request_id,
+            2,
+            vec![CommandResult::Pong {
+                bridge_version: "json-fake-0.1.0".to_string(),
+            }],
+        );
+        let response_body = encode_json_response(&response)
+            .expect("encode json response")
+            .into_bytes();
+        stream
+            .write_all(&(response_body.len() as u32).to_be_bytes())
+            .await
+            .expect("write json response length");
+        stream
+            .write_all(&response_body)
+            .await
+            .expect("write json response body");
+    });
+
+    Ok((address, bridge_task))
 }
 
 async fn start_single_response_bridge(
