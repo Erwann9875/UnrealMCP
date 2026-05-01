@@ -1,1 +1,14 @@
 .worktrees/
+/target/
+/.idea/
+/.vscode/
+*.user
+*.suo
+*.sln.DotSettings.user
+
+# Unreal build artifacts
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
