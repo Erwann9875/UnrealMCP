@@ -38,6 +38,27 @@ pub enum Command {
     AssetCreateFolder {
         path: String,
     },
+    AssetImportTexture {
+        spec: AssetImportSpec,
+    },
+    AssetImportStaticMesh {
+        spec: AssetImportSpec,
+    },
+    AssetBulkImport {
+        items: Vec<AssetImportItem>,
+    },
+    AssetValidate {
+        spec: AssetValidateSpec,
+    },
+    MeshCreateBuilding {
+        spec: GeneratedBuildingSpec,
+    },
+    MeshCreateSign {
+        spec: GeneratedSignSpec,
+    },
+    StaticMeshSetCollision {
+        spec: StaticMeshCollisionSpec,
+    },
     MaterialCreate {
         path: String,
         base_color: [f64; 4],
@@ -369,10 +390,108 @@ pub struct PlacementSnapSpec {
     pub offset_z: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetImportSpec {
+    pub source_file: String,
+    pub destination_path: String,
+    pub replace_existing: bool,
+    pub save: bool,
+    pub srgb: Option<bool>,
+    pub generate_collision: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetImportItem {
+    pub kind: String,
+    pub source_file: String,
+    pub destination_path: String,
+    pub replace_existing: bool,
+    pub save: bool,
+    pub srgb: Option<bool>,
+    pub generate_collision: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetValidateSpec {
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeneratedBuildingSpec {
+    pub path: String,
+    pub width: f64,
+    pub depth: f64,
+    pub height: f64,
+    pub floors: u32,
+    pub window_rows: u32,
+    pub window_columns: u32,
+    pub material: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeneratedSignSpec {
+    pub path: String,
+    pub width: f64,
+    pub height: f64,
+    pub depth: f64,
+    pub text: Option<String>,
+    pub material: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaticMeshCollisionSpec {
+    pub paths: Vec<String>,
+    pub collision_trace: String,
+    pub simple_collision: bool,
+    pub rebuild: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetOperation {
     pub path: String,
     pub created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetImportOperation {
+    pub source_file: String,
+    pub path: String,
+    pub class_name: String,
+    pub imported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetImportResult {
+    pub assets: Vec<AssetImportOperation>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetValidation {
+    pub path: String,
+    pub exists: bool,
+    pub class_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetValidationResult {
+    pub assets: Vec<AssetValidation>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedMeshOperation {
+    pub path: String,
+    pub created: bool,
+    pub vertex_count: usize,
+    pub triangle_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaticMeshOperation {
+    pub path: String,
+    pub changed: bool,
+    pub collision_trace: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -495,6 +614,10 @@ pub enum CommandResult {
         total_count: usize,
     },
     AssetOperation(AssetOperation),
+    AssetImport(AssetImportResult),
+    AssetValidation(AssetValidationResult),
+    GeneratedMesh(GeneratedMeshOperation),
+    StaticMeshOperation(StaticMeshOperation),
     MaterialOperation(MaterialOperation),
     ProceduralTextureOperation(ProceduralTextureOperation),
     MaterialParameterOperation(MaterialParameterOperation),

@@ -1,13 +1,16 @@
 use unreal_mcp_protocol::{
-    ActorQuery, ActorSpawnSpec, AssetOperation, BlueprintComponentOperation, BlueprintOperation,
-    Command, CommandResult, ErrorMode, IndexedError, LandscapeCreateSpec, LandscapeHeightPatch,
-    LandscapeLayerPaint, LandscapeOperation, LevelInfo, LevelList, LevelOperation,
-    LightComponentSpec, LightSpec, LightSummary, LightingOperation, MaterialAppliedActor,
-    MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
-    MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult, PlacementSnapSpec,
-    ProceduralTextureOperation, ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode,
-    RuntimeAnimationOperation, RuntimeAnimationSpec, SpawnedActor, StaticMeshComponentSpec,
-    TextureCreateSpec, Transform, WorldQueryResult,
+    ActorQuery, ActorSpawnSpec, AssetImportItem, AssetImportOperation, AssetImportResult,
+    AssetImportSpec, AssetOperation, AssetValidateSpec, AssetValidation, AssetValidationResult,
+    BlueprintComponentOperation, BlueprintOperation, Command, CommandResult, ErrorMode,
+    GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec, IndexedError,
+    LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint, LandscapeOperation, LevelInfo,
+    LevelList, LevelOperation, LightComponentSpec, LightSpec, LightSummary, LightingOperation,
+    MaterialAppliedActor, MaterialApplyResult, MaterialAssignment, MaterialOperation,
+    MaterialParameter, MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
+    PlacementSnapSpec, ProceduralTextureOperation, ProtocolError, RequestEnvelope,
+    ResponseEnvelope, ResponseMode, RuntimeAnimationOperation, RuntimeAnimationSpec, SpawnedActor,
+    StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation, TextureCreateSpec,
+    Transform, WorldQueryResult,
 };
 
 #[test]
@@ -616,6 +619,145 @@ fn landscape_grounding_results_roundtrip_preserve_payloads() {
 
     let text = encode_json_response(&response).expect("encode response");
     let decoded = decode_json_response(&text).expect("decode response");
+
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn asset_import_mesh_requests_roundtrip_preserve_payloads() {
+    let request = RequestEnvelope::new(
+        64,
+        ResponseMode::Summary,
+        ErrorMode::Continue,
+        vec![
+            Command::AssetImportTexture {
+                spec: AssetImportSpec {
+                    source_file: "C:/Temp/mcp_texture.png".to_string(),
+                    destination_path: "/Game/MCP/Assets/T_Test".to_string(),
+                    replace_existing: true,
+                    save: false,
+                    srgb: Some(true),
+                    generate_collision: None,
+                },
+            },
+            Command::AssetImportStaticMesh {
+                spec: AssetImportSpec {
+                    source_file: "C:/Temp/mcp_mesh.fbx".to_string(),
+                    destination_path: "/Game/MCP/Assets/SM_Test".to_string(),
+                    replace_existing: true,
+                    save: false,
+                    srgb: None,
+                    generate_collision: Some(true),
+                },
+            },
+            Command::AssetBulkImport {
+                items: vec![
+                    AssetImportItem {
+                        kind: "texture".to_string(),
+                        source_file: "C:/Temp/a.png".to_string(),
+                        destination_path: "/Game/MCP/Assets/T_A".to_string(),
+                        replace_existing: true,
+                        save: false,
+                        srgb: Some(false),
+                        generate_collision: None,
+                    },
+                    AssetImportItem {
+                        kind: "static_mesh".to_string(),
+                        source_file: "C:/Temp/a.fbx".to_string(),
+                        destination_path: "/Game/MCP/Assets/SM_A".to_string(),
+                        replace_existing: false,
+                        save: true,
+                        srgb: None,
+                        generate_collision: Some(true),
+                    },
+                ],
+            },
+            Command::AssetValidate {
+                spec: AssetValidateSpec {
+                    paths: vec![
+                        "/Game/MCP/Assets/T_A".to_string(),
+                        "/Game/MCP/Assets/SM_A".to_string(),
+                    ],
+                },
+            },
+            Command::MeshCreateBuilding {
+                spec: GeneratedBuildingSpec {
+                    path: "/Game/MCP/Meshes/SM_TestBuilding".to_string(),
+                    width: 800.0,
+                    depth: 600.0,
+                    height: 2400.0,
+                    floors: 12,
+                    window_rows: 12,
+                    window_columns: 6,
+                    material: Some("/Game/MCP/Materials/M_Glass".to_string()),
+                },
+            },
+            Command::MeshCreateSign {
+                spec: GeneratedSignSpec {
+                    path: "/Game/MCP/Meshes/SM_HollywoodSignPanel".to_string(),
+                    width: 900.0,
+                    height: 240.0,
+                    depth: 30.0,
+                    text: Some("HOLLYWOOD".to_string()),
+                    material: Some("/Game/MCP/Materials/M_WhitePaint".to_string()),
+                },
+            },
+            Command::StaticMeshSetCollision {
+                spec: StaticMeshCollisionSpec {
+                    paths: vec!["/Game/MCP/Meshes/SM_TestBuilding".to_string()],
+                    collision_trace: "use_simple_as_complex".to_string(),
+                    simple_collision: true,
+                    rebuild: true,
+                },
+            },
+        ],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn asset_import_mesh_results_roundtrip_preserve_payloads() {
+    let response = ResponseEnvelope::success(
+        65,
+        13,
+        vec![
+            CommandResult::AssetImport(AssetImportResult {
+                assets: vec![AssetImportOperation {
+                    source_file: "C:/Temp/mcp_texture.png".to_string(),
+                    path: "/Game/MCP/Assets/T_Test".to_string(),
+                    class_name: "Texture2D".to_string(),
+                    imported: true,
+                }],
+                count: 1,
+            }),
+            CommandResult::AssetValidation(AssetValidationResult {
+                assets: vec![AssetValidation {
+                    path: "/Game/MCP/Assets/T_Test".to_string(),
+                    exists: true,
+                    class_name: Some("Texture2D".to_string()),
+                }],
+                count: 1,
+            }),
+            CommandResult::GeneratedMesh(GeneratedMeshOperation {
+                path: "/Game/MCP/Meshes/SM_TestBuilding".to_string(),
+                created: true,
+                vertex_count: 96,
+                triangle_count: 48,
+            }),
+            CommandResult::StaticMeshOperation(StaticMeshOperation {
+                path: "/Game/MCP/Meshes/SM_TestBuilding".to_string(),
+                changed: true,
+                collision_trace: "use_simple_as_complex".to_string(),
+            }),
+        ],
+    );
+
+    let bytes = encode_msgpack_response(&response).expect("encode response");
+    let decoded = decode_msgpack_response(&bytes).expect("decode response");
 
     assert_eq!(decoded, response);
 }
