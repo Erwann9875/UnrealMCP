@@ -18,11 +18,15 @@
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Editor.h"
+#include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/ExponentialHeightFog.h"
 #include "Engine/PointLight.h"
 #include "Engine/PostProcessVolume.h"
 #include "Engine/RectLight.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "Engine/SkyLight.h"
 #include "Engine/SpotLight.h"
 #include "Engine/StaticMesh.h"
@@ -33,6 +37,8 @@
 #include "Factories/MaterialFactoryNew.h"
 #include "FileHelpers.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "MaterialEditingLibrary.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
@@ -49,6 +55,8 @@
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 #include "ScopedTransaction.h"
+#include "Runtime/UnrealMCPRuntimeAnimationPreset.h"
+#include "Runtime/UnrealMCPRuntimeAnimatorComponent.h"
 #include "UObject/Package.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealMCPBridgeServer, Log, All);
@@ -376,6 +384,56 @@ TSharedRef<FJsonObject> MakeBulkLightResult(const TArray<TSharedPtr<FJsonValue>>
     return ResultData;
 }
 
+TSharedRef<FJsonObject> MakeBlueprintOperation(const FString& Path, bool bCreated, bool bCompiled)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetStringField(TEXT("path"), Path);
+    ResultData->SetBoolField(TEXT("created"), bCreated);
+    ResultData->SetBoolField(TEXT("compiled"), bCompiled);
+    return ResultData;
+}
+
+TSharedRef<FJsonObject> MakeBlueprintComponentOperation(
+    const FString& BlueprintPath,
+    const TArray<FString>& Components)
+{
+    TArray<TSharedPtr<FJsonValue>> ComponentValues;
+    for (const FString& Component : Components)
+    {
+        ComponentValues.Add(MakeStringValue(Component));
+    }
+
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetStringField(TEXT("blueprint"), BlueprintPath);
+    ResultData->SetArrayField(TEXT("components"), ComponentValues);
+    ResultData->SetNumberField(TEXT("count"), ComponentValues.Num());
+    return ResultData;
+}
+
+TSharedRef<FJsonObject> MakeRuntimeAnimationOperation(
+    const FString& Path,
+    const TArray<FString>& Attached)
+{
+    TArray<TSharedPtr<FJsonValue>> AttachedValues;
+    for (const FString& Target : Attached)
+    {
+        AttachedValues.Add(MakeStringValue(Target));
+    }
+
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    if (Path.IsEmpty())
+    {
+        ResultData->SetField(TEXT("path"), MakeShared<FJsonValueNull>());
+    }
+    else
+    {
+        ResultData->SetStringField(TEXT("path"), Path);
+    }
+    ResultData->SetArrayField(TEXT("attached"), AttachedValues);
+    ResultData->SetNumberField(TEXT("count"), AttachedValues.Num());
+    return ResultData;
+}
+
 void AddGeneratedLightingTags(AActor& Actor, const TArray<FString>& ExtraTags = TArray<FString>())
 {
     Actor.Tags.AddUnique(TEXT("mcp.generated"));
@@ -613,6 +671,176 @@ bool IsLightActorKind(const AActor* Actor, const FString& Kind)
     }
 
     return false;
+}
+
+USCS_Node* FindSCSNodeByName(UBlueprint& Blueprint, const FName ComponentName)
+{
+    if (!Blueprint.SimpleConstructionScript)
+    {
+        return nullptr;
+    }
+
+    for (USCS_Node* Node : Blueprint.SimpleConstructionScript->GetAllNodes())
+    {
+        if (Node && Node->GetVariableName() == ComponentName)
+        {
+            return Node;
+        }
+    }
+
+    return nullptr;
+}
+
+template <typename TComponent>
+TComponent* FindOrCreateBlueprintComponent(UBlueprint& Blueprint, const FName ComponentName, bool& bOutCreated)
+{
+    bOutCreated = false;
+    if (!Blueprint.SimpleConstructionScript)
+    {
+        Blueprint.SimpleConstructionScript = NewObject<USimpleConstructionScript>(&Blueprint);
+    }
+
+    if (USCS_Node* ExistingNode = FindSCSNodeByName(Blueprint, ComponentName))
+    {
+        return Cast<TComponent>(ExistingNode->ComponentTemplate);
+    }
+
+    USCS_Node* Node = Blueprint.SimpleConstructionScript->CreateNode(TComponent::StaticClass(), ComponentName);
+    if (!Node)
+    {
+        return nullptr;
+    }
+
+    Blueprint.SimpleConstructionScript->AddNode(Node);
+    bOutCreated = true;
+    return Cast<TComponent>(Node->ComponentTemplate);
+}
+
+void ApplyRelativeTransform(USceneComponent& Component, const TSharedPtr<FJsonObject>& Data)
+{
+    TSharedPtr<FJsonObject> TransformData = Data;
+    const TSharedPtr<FJsonObject>* NestedTransform = nullptr;
+    if (Data.IsValid() && Data->TryGetObjectField(TEXT("transform"), NestedTransform) && NestedTransform != nullptr &&
+        NestedTransform->IsValid())
+    {
+        TransformData = *NestedTransform;
+    }
+
+    FVector Location = FVector::ZeroVector;
+    FVector Scale = FVector(1.0, 1.0, 1.0);
+    FRotator Rotation = FRotator::ZeroRotator;
+    ReadVectorField(TransformData, TEXT("location"), FVector::ZeroVector, Location);
+    ReadRotatorField(TransformData, TEXT("rotation"), FRotator::ZeroRotator, Rotation);
+    ReadVectorField(TransformData, TEXT("scale"), FVector(1.0, 1.0, 1.0), Scale);
+    Component.SetRelativeLocation(Location);
+    Component.SetRelativeRotation(Rotation);
+    Component.SetRelativeScale3D(Scale);
+}
+
+UBlueprint* LoadBlueprintAsset(const FString& BlueprintPath)
+{
+    return LoadObject<UBlueprint>(nullptr, *ToObjectPath(BlueprintPath));
+}
+
+UClass* ResolveBlueprintParentClass(const FString& ParentClass)
+{
+    if (ParentClass.IsEmpty() || ParentClass.Equals(TEXT("Actor"), ESearchCase::IgnoreCase))
+    {
+        return AActor::StaticClass();
+    }
+
+    if (UClass* LoadedClass = LoadObject<UClass>(nullptr, *ParentClass))
+    {
+        return LoadedClass;
+    }
+
+    return nullptr;
+}
+
+bool ReadAnimationSpecData(const TSharedPtr<FJsonObject>& Data, TSharedPtr<FJsonObject>& OutSpecData)
+{
+    OutSpecData = Data;
+    const TSharedPtr<FJsonObject>* NestedSpec = nullptr;
+    if (Data.IsValid() && Data->TryGetObjectField(TEXT("spec"), NestedSpec) && NestedSpec != nullptr && NestedSpec->IsValid())
+    {
+        OutSpecData = *NestedSpec;
+    }
+
+    return OutSpecData.IsValid();
+}
+
+bool ConfigureAnimationPreset(
+    UUnrealMCPRuntimeAnimationPreset& Preset,
+    EUnrealMCPRuntimeAnimationKind Kind,
+    const TSharedPtr<FJsonObject>& SpecData)
+{
+    if (!SpecData.IsValid())
+    {
+        return false;
+    }
+
+    Preset.Kind = Kind;
+
+    FString TargetComponent;
+    if (SpecData->TryGetStringField(TEXT("target_component"), TargetComponent) && !TargetComponent.IsEmpty())
+    {
+        Preset.TargetComponentName = FName(*TargetComponent);
+    }
+    else
+    {
+        Preset.TargetComponentName = NAME_None;
+    }
+
+    FString ParameterName;
+    if (SpecData->TryGetStringField(TEXT("parameter_name"), ParameterName) && !ParameterName.IsEmpty())
+    {
+        Preset.ParameterName = FName(*ParameterName);
+    }
+
+    ReadColorField(SpecData, TEXT("color_a"), Preset.ColorA, Preset.ColorA);
+    ReadColorField(SpecData, TEXT("color_b"), Preset.ColorB, Preset.ColorB);
+
+    double NumberValue = 0.0;
+    if (SpecData->TryGetNumberField(TEXT("from_scalar"), NumberValue))
+    {
+        Preset.FromScalar = static_cast<float>(NumberValue);
+    }
+    if (SpecData->TryGetNumberField(TEXT("to_scalar"), NumberValue))
+    {
+        Preset.ToScalar = static_cast<float>(NumberValue);
+    }
+    if (SpecData->TryGetNumberField(TEXT("speed"), NumberValue))
+    {
+        Preset.Speed = static_cast<float>(NumberValue);
+    }
+    if (SpecData->TryGetNumberField(TEXT("amplitude"), NumberValue))
+    {
+        Preset.Amplitude = static_cast<float>(NumberValue);
+    }
+    if (SpecData->TryGetNumberField(TEXT("base_intensity"), NumberValue))
+    {
+        Preset.BaseIntensity = static_cast<float>(NumberValue);
+    }
+    if (SpecData->TryGetNumberField(TEXT("phase_offset"), NumberValue))
+    {
+        Preset.PhaseOffset = static_cast<float>(NumberValue);
+    }
+
+    ReadVectorField(SpecData, TEXT("axis"), Preset.Axis, Preset.Axis);
+    return true;
+}
+
+void AddPresetsToAnimator(
+    UUnrealMCPRuntimeAnimatorComponent& Animator,
+    const TArray<UUnrealMCPRuntimeAnimationPreset*>& Presets)
+{
+    for (UUnrealMCPRuntimeAnimationPreset* Preset : Presets)
+    {
+        if (Preset)
+        {
+            Animator.Presets.AddUnique(Preset);
+        }
+    }
 }
 
 uint8 ColorChannelToByte(double Value)
@@ -1220,6 +1448,14 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         CommandNames.Add(MakeStringValue(TEXT("lighting.set_post_process")));
         CommandNames.Add(MakeStringValue(TEXT("lighting.bulk_set_lights")));
         CommandNames.Add(MakeStringValue(TEXT("lighting.set_time_of_day")));
+        CommandNames.Add(MakeStringValue(TEXT("blueprint.create_actor")));
+        CommandNames.Add(MakeStringValue(TEXT("blueprint.add_static_mesh_component")));
+        CommandNames.Add(MakeStringValue(TEXT("blueprint.add_light_component")));
+        CommandNames.Add(MakeStringValue(TEXT("blueprint.compile")));
+        CommandNames.Add(MakeStringValue(TEXT("runtime.create_led_animation")));
+        CommandNames.Add(MakeStringValue(TEXT("runtime.create_moving_light_animation")));
+        CommandNames.Add(MakeStringValue(TEXT("runtime.create_material_parameter_animation")));
+        CommandNames.Add(MakeStringValue(TEXT("runtime.attach_animation_to_actor")));
 
         TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
         ResultData->SetArrayField(TEXT("commands"), CommandNames);
@@ -2139,6 +2375,377 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         ConfigureDirectionalLight(*World, TEXT("MCP_SunLight"), SunRotation, SunIntensity, SunColor, Changed);
         World->MarkPackageDirty();
         return MakeTaggedResult(TEXT("lighting_operation"), MakeLightingOperationResult(Changed));
+    }
+
+    if (CommandType == TEXT("blueprint_create_actor"))
+    {
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("blueprint.create_actor requires data.path"));
+            return nullptr;
+        }
+
+        FString ParentClassName = TEXT("Actor");
+        Data->TryGetStringField(TEXT("parent_class"), ParentClassName);
+        UClass* ParentClass = ResolveBlueprintParentClass(ParentClassName);
+        if (!ParentClass)
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), FString::Printf(TEXT("failed to resolve parent class '%s'"), *ParentClassName));
+            return nullptr;
+        }
+
+        FString PackagePath;
+        FString AssetName;
+        FString PathError;
+        if (!SplitAssetPath(Path, PackagePath, AssetName, PathError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), PathError);
+            return nullptr;
+        }
+
+        if (UBlueprint* ExistingBlueprint = LoadBlueprintAsset(Path))
+        {
+            ExistingBlueprint->Modify();
+            return MakeTaggedResult(TEXT("blueprint_operation"), MakeBlueprintOperation(Path, false, false));
+        }
+
+        UPackage* Package = CreatePackage(*(PackagePath / AssetName));
+        UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+            ParentClass,
+            Package,
+            FName(*AssetName),
+            BPTYPE_Normal,
+            UBlueprint::StaticClass(),
+            UBlueprintGeneratedClass::StaticClass(),
+            FName(TEXT("UnrealMCPBridge")));
+        if (!Blueprint)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to create Blueprint '%s'"), *Path));
+            return nullptr;
+        }
+
+        FAssetRegistryModule::AssetCreated(Blueprint);
+        Package->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("blueprint_operation"), MakeBlueprintOperation(Path, true, false));
+    }
+
+    if (CommandType == TEXT("blueprint_add_static_mesh_component"))
+    {
+        FString BlueprintPath;
+        if (!Data->TryGetStringField(TEXT("blueprint"), BlueprintPath) || BlueprintPath.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("blueprint.add_static_mesh_component requires data.blueprint"));
+            return nullptr;
+        }
+
+        const TSharedPtr<FJsonObject>* ComponentData = nullptr;
+        if (!Data->TryGetObjectField(TEXT("component"), ComponentData) || ComponentData == nullptr || !ComponentData->IsValid())
+        {
+            ComponentData = &Data;
+        }
+
+        FString ComponentName;
+        FString MeshPath;
+        (*ComponentData)->TryGetStringField(TEXT("name"), ComponentName);
+        (*ComponentData)->TryGetStringField(TEXT("mesh"), MeshPath);
+        if (ComponentName.IsEmpty() || MeshPath.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("static mesh component requires name and mesh"));
+            return nullptr;
+        }
+
+        UBlueprint* Blueprint = LoadBlueprintAsset(BlueprintPath);
+        UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
+        if (!Blueprint || !Mesh)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to load Blueprint or static mesh"));
+            return nullptr;
+        }
+
+        bool bCreated = false;
+        UStaticMeshComponent* Component = FindOrCreateBlueprintComponent<UStaticMeshComponent>(*Blueprint, FName(*ComponentName), bCreated);
+        if (!Component)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to create static mesh component template"));
+            return nullptr;
+        }
+
+        Component->Modify();
+        Component->SetStaticMesh(Mesh);
+        Component->SetMobility(EComponentMobility::Movable);
+        ApplyRelativeTransform(*Component, *ComponentData);
+
+        FString MaterialPath;
+        if ((*ComponentData)->TryGetStringField(TEXT("material"), MaterialPath) && !MaterialPath.IsEmpty())
+        {
+            if (UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *ToObjectPath(MaterialPath)))
+            {
+                Component->SetMaterial(0, Material);
+            }
+        }
+
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+        Blueprint->MarkPackageDirty();
+        TArray<FString> Components = {ComponentName};
+        return MakeTaggedResult(TEXT("blueprint_component_operation"), MakeBlueprintComponentOperation(BlueprintPath, Components));
+    }
+
+    if (CommandType == TEXT("blueprint_add_light_component"))
+    {
+        FString BlueprintPath;
+        if (!Data->TryGetStringField(TEXT("blueprint"), BlueprintPath) || BlueprintPath.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("blueprint.add_light_component requires data.blueprint"));
+            return nullptr;
+        }
+
+        const TSharedPtr<FJsonObject>* ComponentData = nullptr;
+        if (!Data->TryGetObjectField(TEXT("component"), ComponentData) || ComponentData == nullptr || !ComponentData->IsValid())
+        {
+            ComponentData = &Data;
+        }
+
+        FString ComponentName;
+        (*ComponentData)->TryGetStringField(TEXT("name"), ComponentName);
+        if (ComponentName.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("light component requires name"));
+            return nullptr;
+        }
+
+        FString Kind = TEXT("point");
+        (*ComponentData)->TryGetStringField(TEXT("kind"), Kind);
+        Kind.ToLowerInline();
+
+        UBlueprint* Blueprint = LoadBlueprintAsset(BlueprintPath);
+        if (!Blueprint)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to load Blueprint '%s'"), *BlueprintPath));
+            return nullptr;
+        }
+
+        FLinearColor Color = FLinearColor(1.0f, 0.82f, 0.55f, 1.0f);
+        ReadColorField(*ComponentData, TEXT("color"), Color, Color);
+        double Intensity = 5000.0;
+        double AttenuationRadius = 1000.0;
+        double SourceRadius = 24.0;
+        double SourceWidth = 64.0;
+        double SourceHeight = 32.0;
+        (*ComponentData)->TryGetNumberField(TEXT("intensity"), Intensity);
+        (*ComponentData)->TryGetNumberField(TEXT("attenuation_radius"), AttenuationRadius);
+        (*ComponentData)->TryGetNumberField(TEXT("source_radius"), SourceRadius);
+        (*ComponentData)->TryGetNumberField(TEXT("source_width"), SourceWidth);
+        (*ComponentData)->TryGetNumberField(TEXT("source_height"), SourceHeight);
+
+        ULightComponent* Component = nullptr;
+        if (Kind == TEXT("rect"))
+        {
+            bool bCreated = false;
+            URectLightComponent* RectComponent = FindOrCreateBlueprintComponent<URectLightComponent>(*Blueprint, FName(*ComponentName), bCreated);
+            if (RectComponent)
+            {
+                RectComponent->SetAttenuationRadius(static_cast<float>(AttenuationRadius));
+                RectComponent->SetSourceWidth(static_cast<float>(SourceWidth));
+                RectComponent->SetSourceHeight(static_cast<float>(SourceHeight));
+            }
+            Component = RectComponent;
+        }
+        else if (Kind == TEXT("spot"))
+        {
+            bool bCreated = false;
+            USpotLightComponent* SpotComponent = FindOrCreateBlueprintComponent<USpotLightComponent>(*Blueprint, FName(*ComponentName), bCreated);
+            if (SpotComponent)
+            {
+                SpotComponent->SetAttenuationRadius(static_cast<float>(AttenuationRadius));
+                SpotComponent->SetSourceRadius(static_cast<float>(SourceRadius));
+            }
+            Component = SpotComponent;
+        }
+        else
+        {
+            bool bCreated = false;
+            UPointLightComponent* PointComponent = FindOrCreateBlueprintComponent<UPointLightComponent>(*Blueprint, FName(*ComponentName), bCreated);
+            if (PointComponent)
+            {
+                PointComponent->SetAttenuationRadius(static_cast<float>(AttenuationRadius));
+                PointComponent->SetSourceRadius(static_cast<float>(SourceRadius));
+            }
+            Component = PointComponent;
+        }
+
+        if (!Component)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to create light component template"));
+            return nullptr;
+        }
+
+        Component->Modify();
+        Component->SetMobility(EComponentMobility::Movable);
+        Component->SetIntensity(static_cast<float>(Intensity));
+        Component->SetLightColor(Color);
+        ApplyRelativeTransform(*Component, *ComponentData);
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+        Blueprint->MarkPackageDirty();
+        TArray<FString> Components = {ComponentName};
+        return MakeTaggedResult(TEXT("blueprint_component_operation"), MakeBlueprintComponentOperation(BlueprintPath, Components));
+    }
+
+    if (CommandType == TEXT("blueprint_compile"))
+    {
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("blueprint.compile requires data.path"));
+            return nullptr;
+        }
+
+        UBlueprint* Blueprint = LoadBlueprintAsset(Path);
+        if (!Blueprint)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to load Blueprint '%s'"), *Path));
+            return nullptr;
+        }
+
+        FKismetEditorUtilities::CompileBlueprint(Blueprint);
+        Blueprint->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("blueprint_operation"), MakeBlueprintOperation(Path, false, true));
+    }
+
+    if (CommandType == TEXT("runtime_create_led_animation") ||
+        CommandType == TEXT("runtime_create_moving_light_animation") ||
+        CommandType == TEXT("runtime_create_material_parameter_animation"))
+    {
+        TSharedPtr<FJsonObject> SpecData;
+        ReadAnimationSpecData(Data, SpecData);
+
+        FString Path;
+        if (!SpecData->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("runtime animation creation requires data.path"));
+            return nullptr;
+        }
+
+        FString PackagePath;
+        FString AssetName;
+        FString PathError;
+        if (!SplitAssetPath(Path, PackagePath, AssetName, PathError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), PathError);
+            return nullptr;
+        }
+
+        EUnrealMCPRuntimeAnimationKind Kind = EUnrealMCPRuntimeAnimationKind::Led;
+        if (CommandType == TEXT("runtime_create_moving_light_animation"))
+        {
+            Kind = EUnrealMCPRuntimeAnimationKind::MovingLight;
+        }
+        else if (CommandType == TEXT("runtime_create_material_parameter_animation"))
+        {
+            Kind = EUnrealMCPRuntimeAnimationKind::MaterialParameter;
+        }
+
+        UUnrealMCPRuntimeAnimationPreset* Preset = LoadObject<UUnrealMCPRuntimeAnimationPreset>(nullptr, *ToObjectPath(Path));
+        if (!Preset)
+        {
+            UPackage* Package = CreatePackage(*(PackagePath / AssetName));
+            Preset = NewObject<UUnrealMCPRuntimeAnimationPreset>(Package, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
+            FAssetRegistryModule::AssetCreated(Preset);
+        }
+
+        if (!Preset || !ConfigureAnimationPreset(*Preset, Kind, SpecData))
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to create runtime animation '%s'"), *Path));
+            return nullptr;
+        }
+
+        Preset->MarkPackageDirty();
+        if (UPackage* Package = Preset->GetOutermost())
+        {
+            Package->MarkPackageDirty();
+        }
+
+        return MakeTaggedResult(TEXT("runtime_animation_operation"), MakeRuntimeAnimationOperation(Path, TArray<FString>()));
+    }
+
+    if (CommandType == TEXT("runtime_attach_animation_to_actor"))
+    {
+        const TArray<FString> Names = ReadStringArrayField(Data, TEXT("names"));
+        const TArray<FString> Tags = ReadStringArrayField(Data, TEXT("tags"));
+        const TArray<FString> AnimationPaths = ReadStringArrayField(Data, TEXT("animations"));
+        FString BlueprintPath;
+        Data->TryGetStringField(TEXT("blueprint"), BlueprintPath);
+
+        if (AnimationPaths.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("runtime.attach_animation_to_actor requires animations"));
+            return nullptr;
+        }
+
+        TArray<UUnrealMCPRuntimeAnimationPreset*> Presets;
+        for (const FString& AnimationPath : AnimationPaths)
+        {
+            if (UUnrealMCPRuntimeAnimationPreset* Preset = LoadObject<UUnrealMCPRuntimeAnimationPreset>(nullptr, *ToObjectPath(AnimationPath)))
+            {
+                Presets.Add(Preset);
+            }
+        }
+
+        if (Presets.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to load runtime animation assets"));
+            return nullptr;
+        }
+
+        TArray<FString> Attached;
+        if (!BlueprintPath.IsEmpty())
+        {
+            UBlueprint* Blueprint = LoadBlueprintAsset(BlueprintPath);
+            if (Blueprint)
+            {
+                bool bCreated = false;
+                UUnrealMCPRuntimeAnimatorComponent* Animator =
+                    FindOrCreateBlueprintComponent<UUnrealMCPRuntimeAnimatorComponent>(*Blueprint, TEXT("MCP_RuntimeAnimator"), bCreated);
+                if (Animator)
+                {
+                    Animator->Modify();
+                    AddPresetsToAnimator(*Animator, Presets);
+                    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+                    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+                    Blueprint->MarkPackageDirty();
+                    Attached.Add(BlueprintPath);
+                }
+            }
+        }
+
+        UWorld* World = GetEditorWorld();
+        if (World && (!Names.IsEmpty() || !Tags.IsEmpty()))
+        {
+            for (TActorIterator<AActor> It(World); It; ++It)
+            {
+                AActor* Actor = *It;
+                if (!IsValid(Actor) || !ActorMatches(*Actor, Names, Tags))
+                {
+                    continue;
+                }
+
+                UUnrealMCPRuntimeAnimatorComponent* Animator = Actor->FindComponentByClass<UUnrealMCPRuntimeAnimatorComponent>();
+                if (!Animator)
+                {
+                    Animator = NewObject<UUnrealMCPRuntimeAnimatorComponent>(Actor, TEXT("MCP_RuntimeAnimator"), RF_Transactional);
+                    Actor->AddInstanceComponent(Animator);
+                    Animator->RegisterComponent();
+                }
+
+                Actor->Modify();
+                Animator->Modify();
+                AddPresetsToAnimator(*Animator, Presets);
+                Attached.Add(Actor->GetActorLabel());
+            }
+            World->MarkPackageDirty();
+        }
+
+        return MakeTaggedResult(TEXT("runtime_animation_operation"), MakeRuntimeAnimationOperation(FString(), Attached));
     }
 
     return nullptr;
