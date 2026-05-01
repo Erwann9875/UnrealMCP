@@ -77,6 +77,40 @@ async fn connection_tools_reject_unexpected_ping_result() {
 }
 
 #[tokio::test]
+async fn connection_tools_reject_extra_ping_result() {
+    let (address, bridge_task) = start_single_response_bridge(ResponseEnvelope::success(
+        1,
+        3,
+        vec![
+            CommandResult::Pong {
+                bridge_version: "fake-0.1.0".to_string(),
+            },
+            CommandResult::Status(BridgeStatus {
+                connected: true,
+                bridge_version: Some("fake-0.1.0".to_string()),
+                unreal_version: Some("fake-unreal".to_string()),
+            }),
+        ],
+    ))
+    .await
+    .expect("single response bridge");
+
+    let tools = ConnectionTools::new(BridgeClient::new(address));
+
+    let error = tools
+        .ping()
+        .await
+        .expect_err("extra ping result should fail");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("unexpected ping response"),
+        "expected unexpected ping response error, got: {error}"
+    );
+
+    bridge_task.await.expect("single response bridge task");
+}
+
+#[tokio::test]
 async fn bridge_client_rejects_oversized_response_frame() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

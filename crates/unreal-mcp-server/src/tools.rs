@@ -40,10 +40,14 @@ impl ConnectionTools {
             response.errors
         );
 
-        let bridge_version = match response.results.first() {
-            Some(CommandResult::Pong { bridge_version }) => bridge_version.clone(),
-            Some(result) => bail!("unexpected ping response: expected pong, got {result:?}"),
-            None => bail!("unexpected ping response: missing pong result"),
+        let bridge_version = match response.results.as_slice() {
+            [CommandResult::Pong { bridge_version }] => bridge_version.clone(),
+            [] => bail!("unexpected ping response: missing pong result"),
+            [result] => bail!("unexpected ping response: expected pong, got {result:?}"),
+            results => bail!(
+                "unexpected ping response: expected exactly one pong result, got {} results",
+                results.len()
+            ),
         };
 
         Ok(ToolResponse {
