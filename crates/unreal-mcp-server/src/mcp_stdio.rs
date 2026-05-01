@@ -261,10 +261,6 @@ fn world_bulk_delete_schema() -> Value {
             "names": string_array_schema(),
             "tags": string_array_schema()
         },
-        "anyOf": [
-            { "required": ["names"] },
-            { "required": ["tags"] }
-        ],
         "additionalProperties": false
     })
 }

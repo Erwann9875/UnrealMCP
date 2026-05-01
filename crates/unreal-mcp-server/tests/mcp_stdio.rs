@@ -64,6 +64,21 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
         ]
     );
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
+    for tool in tools {
+        let schema = &tool["inputSchema"];
+        assert_eq!(
+            schema["type"], "object",
+            "tool {} must use an object schema",
+            tool["name"]
+        );
+        for disallowed_keyword in ["anyOf", "oneOf", "allOf", "not"] {
+            assert!(
+                schema.get(disallowed_keyword).is_none(),
+                "tool {} must not use top-level {disallowed_keyword}",
+                tool["name"]
+            );
+        }
+    }
 
     let tool_by_name = |name: &str| {
         tools
@@ -87,7 +102,8 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
         &tool_by_name("world.bulk_spawn")["inputSchema"]["properties"]["actors"]["items"];
     assert_eq!(actor_schema["required"], json!(["name", "mesh"]));
     assert_eq!(actor_schema["properties"]["location"]["maxItems"], 3);
-    assert!(tool_by_name("world.bulk_delete")["inputSchema"]["anyOf"].is_array());
+    assert!(tool_by_name("world.bulk_delete")["inputSchema"]["properties"]["names"].is_object());
+    assert!(tool_by_name("world.bulk_delete")["inputSchema"]["properties"]["tags"].is_object());
 }
 
 #[tokio::test]
