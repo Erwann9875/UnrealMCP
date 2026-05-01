@@ -19,3 +19,8 @@ cargo run -p unreal-mcp-server -- --help
 
 - `docs/superpowers/specs/2026-05-01-rust-unreal-mcp-design.md`
 - `docs/superpowers/plans/2026-05-01-rust-unreal-mcp-foundation.md`
+
+## Protocol Docs
+
+- `docs/protocol/envelope.md`
+- `docs/protocol/tools.md`
