@@ -16,9 +16,11 @@ public class UnrealMCPBridge : ModuleRules
         PrivateDependencyModuleNames.AddRange(new[]
         {
             "AssetRegistry",
+            "AssetTools",
             "EditorSubsystem",
             "Json",
             "JsonUtilities",
+            "MaterialEditor",
             "Networking",
             "Projects",
             "Sockets",

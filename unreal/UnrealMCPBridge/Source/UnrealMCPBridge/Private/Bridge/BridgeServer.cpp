@@ -1,5 +1,6 @@
 #include "Bridge/BridgeServer.h"
 
+#include "AssetToolsModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Async/Async.h"
 #include "Common/TcpListener.h"
@@ -10,10 +11,18 @@
 #include "Editor.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Factories/MaterialFactoryNew.h"
 #include "FileHelpers.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
+#include "MaterialEditingLibrary.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionVectorParameter.h"
+#include "Materials/MaterialInstanceConstant.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -24,6 +33,7 @@
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 #include "ScopedTransaction.h"
+#include "UObject/Package.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealMCPBridgeServer, Log, All);
 
@@ -90,6 +100,16 @@ TArray<TSharedPtr<FJsonValue>> MakeVectorArray(double X, double Y, double Z)
     };
 }
 
+TArray<TSharedPtr<FJsonValue>> MakeVector4Array(double X, double Y, double Z, double W)
+{
+    return {
+        MakeNumberValue(X),
+        MakeNumberValue(Y),
+        MakeNumberValue(Z),
+        MakeNumberValue(W),
+    };
+}
+
 bool ReadVectorField(
     const TSharedPtr<FJsonObject>& Object,
     const FString& FieldName,
@@ -117,6 +137,37 @@ bool ReadVectorField(
         (*Values)[0]->AsNumber(),
         (*Values)[1]->AsNumber(),
         (*Values)[2]->AsNumber());
+    return true;
+}
+
+bool ReadColorField(
+    const TSharedPtr<FJsonObject>& Object,
+    const FString& FieldName,
+    const FLinearColor& DefaultValue,
+    FLinearColor& OutValue)
+{
+    OutValue = DefaultValue;
+    if (!Object.IsValid())
+    {
+        return false;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+    if (!Object->TryGetArrayField(FieldName, Values))
+    {
+        return true;
+    }
+
+    if (Values->Num() != 4)
+    {
+        return false;
+    }
+
+    OutValue = FLinearColor(
+        (*Values)[0]->AsNumber(),
+        (*Values)[1]->AsNumber(),
+        (*Values)[2]->AsNumber(),
+        (*Values)[3]->AsNumber());
     return true;
 }
 
@@ -159,6 +210,250 @@ TArray<FString> ReadStringArrayField(const TSharedPtr<FJsonObject>& Object, cons
     }
 
     return Strings;
+}
+
+FString ToObjectPath(const FString& PackagePath)
+{
+    if (PackagePath.Contains(TEXT(".")))
+    {
+        return PackagePath;
+    }
+
+    return FString::Printf(TEXT("%s.%s"), *PackagePath, *FPackageName::GetShortName(PackagePath));
+}
+
+bool SplitAssetPath(const FString& Path, FString& OutPackagePath, FString& OutAssetName, FString& OutError)
+{
+    if (Path.IsEmpty())
+    {
+        OutError = TEXT("asset path is empty");
+        return false;
+    }
+
+    FString PackageName = Path;
+    if (Path.Contains(TEXT(".")))
+    {
+        PackageName = FPackageName::ObjectPathToPackageName(Path);
+    }
+
+    FText Reason;
+    if (!FPackageName::IsValidLongPackageName(PackageName, false, &Reason))
+    {
+        OutError = Reason.ToString();
+        return false;
+    }
+
+    OutPackagePath = FPackageName::GetLongPackagePath(PackageName);
+    OutAssetName = FPackageName::GetShortName(PackageName);
+    if (OutPackagePath.IsEmpty() || OutAssetName.IsEmpty())
+    {
+        OutError = FString::Printf(TEXT("invalid asset path '%s'"), *Path);
+        return false;
+    }
+
+    return true;
+}
+
+TSharedRef<FJsonObject> MakeAssetOperation(const FString& Path, bool bCreated)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetStringField(TEXT("path"), Path);
+    ResultData->SetBoolField(TEXT("created"), bCreated);
+    return ResultData;
+}
+
+TSharedRef<FJsonObject> MakeMaterialOperation(const FString& Path, const FString& Parent, bool bCreated)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetStringField(TEXT("path"), Path);
+    if (Parent.IsEmpty())
+    {
+        ResultData->SetField(TEXT("parent"), MakeShared<FJsonValueNull>());
+    }
+    else
+    {
+        ResultData->SetStringField(TEXT("parent"), Parent);
+    }
+    ResultData->SetBoolField(TEXT("created"), bCreated);
+    return ResultData;
+}
+
+TSharedRef<FJsonObject> MakeTextureOperation(const FString& Path, int32 Width, int32 Height, bool bCreated)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetStringField(TEXT("path"), Path);
+    ResultData->SetNumberField(TEXT("width"), Width);
+    ResultData->SetNumberField(TEXT("height"), Height);
+    ResultData->SetBoolField(TEXT("created"), bCreated);
+    return ResultData;
+}
+
+TSharedRef<FJsonObject> MakeParameterOperation(
+    const FString& Path,
+    int32 ScalarCount,
+    int32 VectorCount,
+    int32 TextureCount)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetStringField(TEXT("path"), Path);
+    ResultData->SetNumberField(TEXT("scalar_count"), ScalarCount);
+    ResultData->SetNumberField(TEXT("vector_count"), VectorCount);
+    ResultData->SetNumberField(TEXT("texture_count"), TextureCount);
+    return ResultData;
+}
+
+void AddAppliedActor(
+    TArray<TSharedPtr<FJsonValue>>& Applied,
+    const AActor& Actor,
+    const FString& MaterialPath,
+    int32 Slot)
+{
+    TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+    Item->SetStringField(TEXT("name"), Actor.GetActorLabel());
+    Item->SetStringField(TEXT("path"), Actor.GetPathName());
+    Item->SetStringField(TEXT("material"), MaterialPath);
+    Item->SetNumberField(TEXT("slot"), Slot);
+    Applied.Add(MakeObjectValue(Item));
+}
+
+TSharedRef<FJsonObject> MakeMaterialApplyResult(const TArray<TSharedPtr<FJsonValue>>& Applied)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("applied"), Applied);
+    ResultData->SetNumberField(TEXT("count"), Applied.Num());
+    return ResultData;
+}
+
+uint8 ColorChannelToByte(double Value)
+{
+    return static_cast<uint8>(FMath::RoundToInt(FMath::Clamp(Value, 0.0, 1.0) * 255.0));
+}
+
+void WriteColorPixel(TArray<uint8>& Pixels, int32 PixelIndex, const FLinearColor& Color)
+{
+    const int32 Offset = PixelIndex * 4;
+    Pixels[Offset] = ColorChannelToByte(Color.B);
+    Pixels[Offset + 1] = ColorChannelToByte(Color.G);
+    Pixels[Offset + 2] = ColorChannelToByte(Color.R);
+    Pixels[Offset + 3] = ColorChannelToByte(Color.A);
+}
+
+bool ApplyMaterialParameters(
+    const TSharedPtr<FJsonObject>& Data,
+    UMaterialInstanceConstant& Instance,
+    int32& ScalarCount,
+    int32& VectorCount,
+    int32& TextureCount)
+{
+    ScalarCount = 0;
+    VectorCount = 0;
+    TextureCount = 0;
+    if (!Data.IsValid())
+    {
+        return false;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Scalars = nullptr;
+    if (Data->TryGetArrayField(TEXT("scalar_parameters"), Scalars))
+    {
+        for (const TSharedPtr<FJsonValue>& Value : *Scalars)
+        {
+            const TSharedPtr<FJsonObject>* Param = nullptr;
+            const TSharedPtr<FJsonObject>* ParamValue = nullptr;
+            FString Name;
+            double ScalarValue = 0.0;
+            if (Value.IsValid() && Value->TryGetObject(Param) && Param != nullptr && (*Param)->TryGetStringField(TEXT("name"), Name) &&
+                (*Param)->TryGetObjectField(TEXT("value"), ParamValue) && ParamValue != nullptr &&
+                (*ParamValue)->TryGetNumberField(TEXT("value"), ScalarValue))
+            {
+                Instance.SetScalarParameterValueEditorOnly(FMaterialParameterInfo(FName(*Name)), static_cast<float>(ScalarValue));
+                ++ScalarCount;
+            }
+        }
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Vectors = nullptr;
+    if (Data->TryGetArrayField(TEXT("vector_parameters"), Vectors))
+    {
+        for (const TSharedPtr<FJsonValue>& Value : *Vectors)
+        {
+            const TSharedPtr<FJsonObject>* Param = nullptr;
+            const TSharedPtr<FJsonObject>* ParamValue = nullptr;
+            FString Name;
+            FLinearColor VectorValue = FLinearColor::White;
+            if (Value.IsValid() && Value->TryGetObject(Param) && Param != nullptr && (*Param)->TryGetStringField(TEXT("name"), Name) &&
+                (*Param)->TryGetObjectField(TEXT("value"), ParamValue) && ParamValue != nullptr &&
+                ReadColorField(*ParamValue, TEXT("value"), FLinearColor::White, VectorValue))
+            {
+                Instance.SetVectorParameterValueEditorOnly(FMaterialParameterInfo(FName(*Name)), VectorValue);
+                ++VectorCount;
+            }
+        }
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Textures = nullptr;
+    if (Data->TryGetArrayField(TEXT("texture_parameters"), Textures))
+    {
+        for (const TSharedPtr<FJsonValue>& Value : *Textures)
+        {
+            const TSharedPtr<FJsonObject>* Param = nullptr;
+            const TSharedPtr<FJsonObject>* ParamValue = nullptr;
+            FString Name;
+            FString TexturePath;
+            if (Value.IsValid() && Value->TryGetObject(Param) && Param != nullptr && (*Param)->TryGetStringField(TEXT("name"), Name) &&
+                (*Param)->TryGetObjectField(TEXT("value"), ParamValue) && ParamValue != nullptr &&
+                (*ParamValue)->TryGetStringField(TEXT("value"), TexturePath))
+            {
+                UTexture* Texture = LoadObject<UTexture>(nullptr, *ToObjectPath(TexturePath));
+                if (Texture)
+                {
+                    Instance.SetTextureParameterValueEditorOnly(FMaterialParameterInfo(FName(*Name)), Texture);
+                    ++TextureCount;
+                }
+            }
+        }
+    }
+
+    Instance.PostEditChange();
+    Instance.MarkPackageDirty();
+    return true;
+}
+
+bool ActorMatches(const AActor& Actor, const TArray<FString>& Names, const TArray<FString>& Tags);
+
+void ApplyMaterialToActors(
+    UWorld& World,
+    const FString& MaterialPath,
+    const TArray<FString>& Names,
+    const TArray<FString>& Tags,
+    int32 Slot,
+    TArray<TSharedPtr<FJsonValue>>& Applied)
+{
+    UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *ToObjectPath(MaterialPath));
+    if (!Material)
+    {
+        return;
+    }
+
+    for (TActorIterator<AActor> It(&World); It; ++It)
+    {
+        AActor* Actor = *It;
+        if (!IsValid(Actor) || !ActorMatches(*Actor, Names, Tags))
+        {
+            continue;
+        }
+
+        UStaticMeshComponent* MeshComponent = Actor->FindComponentByClass<UStaticMeshComponent>();
+        if (!MeshComponent)
+        {
+            continue;
+        }
+
+        Actor->Modify();
+        MeshComponent->Modify();
+        MeshComponent->SetMaterial(Slot, Material);
+        AddAppliedActor(Applied, *Actor, MaterialPath, Slot);
+    }
 }
 
 bool TryGetCommandData(const TSharedPtr<FJsonObject>& CommandObject, TSharedPtr<FJsonObject>& OutData)
@@ -621,6 +916,13 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         CommandNames.Add(MakeStringValue(TEXT("world.bulk_delete")));
         CommandNames.Add(MakeStringValue(TEXT("world.query")));
         CommandNames.Add(MakeStringValue(TEXT("world.snapshot")));
+        CommandNames.Add(MakeStringValue(TEXT("asset.create_folder")));
+        CommandNames.Add(MakeStringValue(TEXT("material.create")));
+        CommandNames.Add(MakeStringValue(TEXT("material.create_instance")));
+        CommandNames.Add(MakeStringValue(TEXT("material.create_procedural_texture")));
+        CommandNames.Add(MakeStringValue(TEXT("material.set_parameters")));
+        CommandNames.Add(MakeStringValue(TEXT("material.bulk_apply")));
+        CommandNames.Add(MakeStringValue(TEXT("world.bulk_set_materials")));
 
         TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
         ResultData->SetArrayField(TEXT("commands"), CommandNames);
@@ -923,6 +1225,315 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         ResultData->SetStringField(TEXT("path"), Path);
         ResultData->SetNumberField(TEXT("total_count"), TotalCount);
         return MakeTaggedResult(TEXT("world_snapshot"), ResultData);
+    }
+
+    if (CommandType == TEXT("asset_create_folder"))
+    {
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("asset.create_folder requires data.path"));
+            return nullptr;
+        }
+
+        FText Reason;
+        if (!FPackageName::IsValidLongPackageName(Path, false, &Reason))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), Reason.ToString());
+            return nullptr;
+        }
+
+        const FString FolderPath = FPackageName::LongPackageNameToFilename(Path);
+        const bool bCreated = IFileManager::Get().MakeDirectory(*FolderPath, true);
+        return MakeTaggedResult(TEXT("asset_operation"), MakeAssetOperation(Path, bCreated));
+    }
+
+    if (CommandType == TEXT("material_create"))
+    {
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("material.create requires data.path"));
+            return nullptr;
+        }
+
+        FString PackagePath;
+        FString AssetName;
+        FString PathError;
+        if (!SplitAssetPath(Path, PackagePath, AssetName, PathError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), PathError);
+            return nullptr;
+        }
+
+        FLinearColor BaseColor = FLinearColor(0.8f, 0.8f, 0.8f, 1.0f);
+        FLinearColor EmissiveColor = FLinearColor::Black;
+        if (!ReadColorField(Data, TEXT("base_color"), BaseColor, BaseColor) ||
+            !ReadColorField(Data, TEXT("emissive_color"), EmissiveColor, EmissiveColor))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("material colors must be arrays of 4 numbers"));
+            return nullptr;
+        }
+
+        double Metallic = 0.0;
+        double Roughness = 0.5;
+        double Specular = 0.5;
+        Data->TryGetNumberField(TEXT("metallic"), Metallic);
+        Data->TryGetNumberField(TEXT("roughness"), Roughness);
+        Data->TryGetNumberField(TEXT("specular"), Specular);
+
+        UMaterialFactoryNew* Factory = NewObject<UMaterialFactoryNew>();
+        FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+        UMaterial* Material = Cast<UMaterial>(
+            AssetToolsModule.Get().CreateAsset(AssetName, PackagePath, UMaterial::StaticClass(), Factory));
+        if (!Material)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to create material '%s'"), *Path));
+            return nullptr;
+        }
+
+        UMaterialExpressionVectorParameter* BaseColorExpression = Cast<UMaterialExpressionVectorParameter>(
+            UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionVectorParameter::StaticClass(), -400, 0));
+        BaseColorExpression->ParameterName = TEXT("BaseColor");
+        BaseColorExpression->DefaultValue = BaseColor;
+        UMaterialEditingLibrary::ConnectMaterialProperty(BaseColorExpression, TEXT(""), MP_BaseColor);
+
+        UMaterialExpressionScalarParameter* MetallicExpression = Cast<UMaterialExpressionScalarParameter>(
+            UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionScalarParameter::StaticClass(), -400, 160));
+        MetallicExpression->ParameterName = TEXT("Metallic");
+        MetallicExpression->DefaultValue = static_cast<float>(Metallic);
+        UMaterialEditingLibrary::ConnectMaterialProperty(MetallicExpression, TEXT(""), MP_Metallic);
+
+        UMaterialExpressionScalarParameter* RoughnessExpression = Cast<UMaterialExpressionScalarParameter>(
+            UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionScalarParameter::StaticClass(), -400, 320));
+        RoughnessExpression->ParameterName = TEXT("Roughness");
+        RoughnessExpression->DefaultValue = static_cast<float>(Roughness);
+        UMaterialEditingLibrary::ConnectMaterialProperty(RoughnessExpression, TEXT(""), MP_Roughness);
+
+        UMaterialExpressionScalarParameter* SpecularExpression = Cast<UMaterialExpressionScalarParameter>(
+            UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionScalarParameter::StaticClass(), -400, 480));
+        SpecularExpression->ParameterName = TEXT("Specular");
+        SpecularExpression->DefaultValue = static_cast<float>(Specular);
+        UMaterialEditingLibrary::ConnectMaterialProperty(SpecularExpression, TEXT(""), MP_Specular);
+
+        if (!EmissiveColor.Equals(FLinearColor::Black))
+        {
+            UMaterialExpressionVectorParameter* EmissiveExpression = Cast<UMaterialExpressionVectorParameter>(
+                UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionVectorParameter::StaticClass(), -400, 640));
+            EmissiveExpression->ParameterName = TEXT("EmissiveColor");
+            EmissiveExpression->DefaultValue = EmissiveColor;
+            UMaterialEditingLibrary::ConnectMaterialProperty(EmissiveExpression, TEXT(""), MP_EmissiveColor);
+        }
+
+        UMaterialEditingLibrary::LayoutMaterialExpressions(Material);
+        Material->PostEditChange();
+        Material->MarkPackageDirty();
+        FAssetRegistryModule::AssetCreated(Material);
+
+        return MakeTaggedResult(TEXT("material_operation"), MakeMaterialOperation(Path, FString(), true));
+    }
+
+    if (CommandType == TEXT("material_create_instance"))
+    {
+        FString Path;
+        FString ParentPath;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty() ||
+            !Data->TryGetStringField(TEXT("parent"), ParentPath) || ParentPath.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("material.create_instance requires data.path and data.parent"));
+            return nullptr;
+        }
+
+        FString PackagePath;
+        FString AssetName;
+        FString PathError;
+        if (!SplitAssetPath(Path, PackagePath, AssetName, PathError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), PathError);
+            return nullptr;
+        }
+
+        UMaterialInterface* Parent = LoadObject<UMaterialInterface>(nullptr, *ToObjectPath(ParentPath));
+        if (!Parent)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to load parent material '%s'"), *ParentPath));
+            return nullptr;
+        }
+
+        UPackage* Package = CreatePackage(*(PackagePath / AssetName));
+        UMaterialInstanceConstant* Instance =
+            NewObject<UMaterialInstanceConstant>(Package, *AssetName, RF_Public | RF_Standalone);
+        Instance->SetParentEditorOnly(Parent);
+        int32 ScalarCount = 0;
+        int32 VectorCount = 0;
+        int32 TextureCount = 0;
+        ApplyMaterialParameters(Data, *Instance, ScalarCount, VectorCount, TextureCount);
+        FAssetRegistryModule::AssetCreated(Instance);
+        Package->MarkPackageDirty();
+
+        return MakeTaggedResult(TEXT("material_operation"), MakeMaterialOperation(Path, ParentPath, true));
+    }
+
+    if (CommandType == TEXT("material_create_procedural_texture"))
+    {
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("material.create_procedural_texture requires data.path"));
+            return nullptr;
+        }
+
+        FString PackagePath;
+        FString AssetName;
+        FString PathError;
+        if (!SplitAssetPath(Path, PackagePath, AssetName, PathError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), PathError);
+            return nullptr;
+        }
+
+        FString Pattern = TEXT("solid");
+        Data->TryGetStringField(TEXT("pattern"), Pattern);
+        int32 Width = 64;
+        int32 Height = 64;
+        int32 CheckerSize = 8;
+        Data->TryGetNumberField(TEXT("width"), Width);
+        Data->TryGetNumberField(TEXT("height"), Height);
+        Data->TryGetNumberField(TEXT("checker_size"), CheckerSize);
+        Width = FMath::Clamp(Width, 1, 4096);
+        Height = FMath::Clamp(Height, 1, 4096);
+        CheckerSize = FMath::Max(CheckerSize, 1);
+
+        FLinearColor ColorA = FLinearColor::White;
+        FLinearColor ColorB = FLinearColor::Black;
+        if (!ReadColorField(Data, TEXT("color_a"), ColorA, ColorA) || !ReadColorField(Data, TEXT("color_b"), ColorB, ColorB))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("texture colors must be arrays of 4 numbers"));
+            return nullptr;
+        }
+
+        UPackage* Package = CreatePackage(*(PackagePath / AssetName));
+        UTexture2D* Texture = NewObject<UTexture2D>(Package, *AssetName, RF_Public | RF_Standalone);
+        TArray<uint8> Pixels;
+        Pixels.SetNumZeroed(Width * Height * 4);
+        for (int32 Y = 0; Y < Height; ++Y)
+        {
+            for (int32 X = 0; X < Width; ++X)
+            {
+                const bool bUseB = Pattern == TEXT("checker") && (((X / CheckerSize) + (Y / CheckerSize)) % 2 == 1);
+                WriteColorPixel(Pixels, Y * Width + X, bUseB ? ColorB : ColorA);
+            }
+        }
+
+        Texture->Source.Init(Width, Height, 1, 1, TSF_BGRA8, Pixels.GetData());
+        Texture->SRGB = true;
+        Texture->MipGenSettings = TMGS_NoMipmaps;
+        Texture->PostEditChange();
+        Texture->MarkPackageDirty();
+        FAssetRegistryModule::AssetCreated(Texture);
+        Package->MarkPackageDirty();
+
+        return MakeTaggedResult(TEXT("procedural_texture_operation"), MakeTextureOperation(Path, Width, Height, true));
+    }
+
+    if (CommandType == TEXT("material_set_parameters"))
+    {
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("material.set_parameters requires data.path"));
+            return nullptr;
+        }
+
+        UMaterialInstanceConstant* Instance = LoadObject<UMaterialInstanceConstant>(nullptr, *ToObjectPath(Path));
+        if (!Instance)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to load material instance '%s'"), *Path));
+            return nullptr;
+        }
+
+        int32 ScalarCount = 0;
+        int32 VectorCount = 0;
+        int32 TextureCount = 0;
+        ApplyMaterialParameters(Data, *Instance, ScalarCount, VectorCount, TextureCount);
+        return MakeTaggedResult(TEXT("material_parameter_operation"), MakeParameterOperation(Path, ScalarCount, VectorCount, TextureCount));
+    }
+
+    if (CommandType == TEXT("material_bulk_apply"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        const TArray<TSharedPtr<FJsonValue>>* Assignments = nullptr;
+        if (!Data->TryGetArrayField(TEXT("assignments"), Assignments))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("material.bulk_apply requires data.assignments"));
+            return nullptr;
+        }
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "BulkApplyMaterials", "MCP Bulk Apply Materials"));
+        TArray<TSharedPtr<FJsonValue>> Applied;
+        for (const TSharedPtr<FJsonValue>& AssignmentValue : *Assignments)
+        {
+            const TSharedPtr<FJsonObject>* Assignment = nullptr;
+            if (!AssignmentValue.IsValid() || !AssignmentValue->TryGetObject(Assignment) || Assignment == nullptr || !Assignment->IsValid())
+            {
+                continue;
+            }
+
+            FString MaterialPath;
+            (*Assignment)->TryGetStringField(TEXT("material"), MaterialPath);
+            if (MaterialPath.IsEmpty())
+            {
+                continue;
+            }
+
+            const TArray<FString> Names = ReadStringArrayField(*Assignment, TEXT("names"));
+            const TArray<FString> Tags = ReadStringArrayField(*Assignment, TEXT("tags"));
+            if (Names.IsEmpty() && Tags.IsEmpty())
+            {
+                continue;
+            }
+
+            int32 Slot = 0;
+            (*Assignment)->TryGetNumberField(TEXT("slot"), Slot);
+            ApplyMaterialToActors(*World, MaterialPath, Names, Tags, Slot, Applied);
+        }
+
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("material_apply"), MakeMaterialApplyResult(Applied));
+    }
+
+    if (CommandType == TEXT("world_bulk_set_materials"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        FString MaterialPath;
+        Data->TryGetStringField(TEXT("material"), MaterialPath);
+        const TArray<FString> Names = ReadStringArrayField(Data, TEXT("names"));
+        const TArray<FString> Tags = ReadStringArrayField(Data, TEXT("tags"));
+        if (MaterialPath.IsEmpty() || (Names.IsEmpty() && Tags.IsEmpty()))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("world.bulk_set_materials requires material and names or tags"));
+            return nullptr;
+        }
+
+        int32 Slot = 0;
+        Data->TryGetNumberField(TEXT("slot"), Slot);
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "BulkSetMaterials", "MCP Bulk Set Materials"));
+        TArray<TSharedPtr<FJsonValue>> Applied;
+        ApplyMaterialToActors(*World, MaterialPath, Names, Tags, Slot, Applied);
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("material_apply"), MakeMaterialApplyResult(Applied));
     }
 
     return nullptr;
