@@ -1,5 +1,6 @@
 use serde_json::json;
 
+use anyhow::{bail, ensure};
 use unreal_mcp_protocol::{Command, CommandResult, ErrorMode, RequestEnvelope, ResponseMode};
 
 use crate::BridgeClient;
@@ -32,9 +33,17 @@ impl ConnectionTools {
             ))
             .await?;
 
+        ensure!(response.ok, "bridge ping response was not ok");
+        ensure!(
+            response.errors.is_empty(),
+            "bridge ping response included errors: {:?}",
+            response.errors
+        );
+
         let bridge_version = match response.results.first() {
             Some(CommandResult::Pong { bridge_version }) => bridge_version.clone(),
-            _ => "unknown".to_string(),
+            Some(result) => bail!("unexpected ping response: expected pong, got {result:?}"),
+            None => bail!("unexpected ping response: missing pong result"),
         };
 
         Ok(ToolResponse {

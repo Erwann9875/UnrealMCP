@@ -1,6 +1,10 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use unreal_mcp_protocol::{Command, CommandResult, ErrorMode, RequestEnvelope, ResponseMode};
+use tokio::task::JoinHandle;
+use unreal_mcp_protocol::{
+    encode_msgpack_response, BridgeStatus, Command, CommandResult, ErrorMode, RequestEnvelope,
+    ResponseEnvelope, ResponseMode,
+};
 use unreal_mcp_server::{BridgeClient, ConnectionTools, ToolResponse};
 use unreal_mcp_tests::start_fake_bridge;
 
@@ -38,6 +42,38 @@ async fn connection_tools_return_compact_ping_response() {
 
     assert_eq!(response.tool_name, "connection.ping");
     assert!(response.summary.contains("fake-0.1.0"));
+    assert_eq!(response.data["ok"].as_bool(), Some(true));
+    assert_eq!(response.data["bridge_version"].as_str(), Some("fake-0.1.0"));
+    assert!(response.data["elapsed_ms"].is_number());
+}
+
+#[tokio::test]
+async fn connection_tools_reject_unexpected_ping_result() {
+    let (address, bridge_task) = start_single_response_bridge(ResponseEnvelope::success(
+        1,
+        3,
+        vec![CommandResult::Status(BridgeStatus {
+            connected: true,
+            bridge_version: Some("fake-0.1.0".to_string()),
+            unreal_version: Some("fake-unreal".to_string()),
+        })],
+    ))
+    .await
+    .expect("single response bridge");
+
+    let tools = ConnectionTools::new(BridgeClient::new(address));
+
+    let error = tools
+        .ping()
+        .await
+        .expect_err("unexpected ping result should fail");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("unexpected ping response"),
+        "expected unexpected ping response error, got: {error}"
+    );
+
+    bridge_task.await.expect("single response bridge task");
 }
 
 #[tokio::test]
@@ -92,4 +128,38 @@ async fn bridge_client_rejects_oversized_response_frame() {
     );
 
     bridge_task.await.expect("oversized response bridge task");
+}
+
+async fn start_single_response_bridge(
+    response: ResponseEnvelope,
+) -> anyhow::Result<(String, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?.to_string();
+
+    let bridge_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept connection");
+        let mut request_len = [0_u8; 4];
+        stream
+            .read_exact(&mut request_len)
+            .await
+            .expect("read request length");
+        let request_len = u32::from_be_bytes(request_len) as usize;
+        let mut request_body = vec![0_u8; request_len];
+        stream
+            .read_exact(&mut request_body)
+            .await
+            .expect("read request body");
+
+        let response_body = encode_msgpack_response(&response).expect("encode response");
+        stream
+            .write_all(&(response_body.len() as u32).to_be_bytes())
+            .await
+            .expect("write response length");
+        stream
+            .write_all(&response_body)
+            .await
+            .expect("write response body");
+    });
+
+    Ok((address, bridge_task))
 }
