@@ -458,6 +458,7 @@ pub struct AssetImportOperation {
     pub path: String,
     pub class_name: String,
     pub imported: bool,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

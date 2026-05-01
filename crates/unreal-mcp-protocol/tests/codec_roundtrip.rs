@@ -731,6 +731,7 @@ fn asset_import_mesh_results_roundtrip_preserve_payloads() {
                     path: "/Game/MCP/Assets/T_Test".to_string(),
                     class_name: "Texture2D".to_string(),
                     imported: true,
+                    message: None,
                 }],
                 count: 1,
             }),

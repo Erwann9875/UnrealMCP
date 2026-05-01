@@ -1,6 +1,7 @@
 #include "Bridge/BridgeServer.h"
 
 #include "AssetToolsModule.h"
+#include "AssetImportTask.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Async/Async.h"
 #include "Common/TcpListener.h"
@@ -53,6 +54,7 @@
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInterface.h"
+#include "MeshDescription.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -65,7 +67,10 @@
 #include "ScopedTransaction.h"
 #include "Runtime/UnrealMCPRuntimeAnimationPreset.h"
 #include "Runtime/UnrealMCPRuntimeAnimatorComponent.h"
+#include "StaticMeshAttributes.h"
 #include "UObject/Package.h"
+#include "PhysicsEngine/AggregateGeom.h"
+#include "PhysicsEngine/BodySetup.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealMCPBridgeServer, Log, All);
 
@@ -490,6 +495,610 @@ TSharedRef<FJsonObject> MakePlacementSnapResult(const TArray<TSharedPtr<FJsonVal
     ResultData->SetArrayField(TEXT("actors"), Actors);
     ResultData->SetNumberField(TEXT("count"), Actors.Num());
     return ResultData;
+}
+
+void AddAssetImportOperation(
+    TArray<TSharedPtr<FJsonValue>>& Assets,
+    const FString& SourceFile,
+    const FString& Path,
+    const FString& ClassName,
+    bool bImported,
+    const FString& Message)
+{
+    TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+    Item->SetStringField(TEXT("source_file"), SourceFile);
+    Item->SetStringField(TEXT("path"), Path);
+    Item->SetStringField(TEXT("class_name"), ClassName);
+    Item->SetBoolField(TEXT("imported"), bImported);
+    if (Message.IsEmpty())
+    {
+        Item->SetField(TEXT("message"), MakeShared<FJsonValueNull>());
+    }
+    else
+    {
+        Item->SetStringField(TEXT("message"), Message);
+    }
+    Assets.Add(MakeObjectValue(Item));
+}
+
+TSharedRef<FJsonObject> MakeAssetImportResult(const TArray<TSharedPtr<FJsonValue>>& Assets)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("assets"), Assets);
+    ResultData->SetNumberField(TEXT("count"), Assets.Num());
+    return ResultData;
+}
+
+TSharedRef<FJsonObject> MakeAssetValidationResult(const TArray<FString>& Paths)
+{
+    FAssetRegistryModule& AssetRegistryModule =
+        FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+
+    TArray<TSharedPtr<FJsonValue>> Assets;
+    for (const FString& Path : Paths)
+    {
+        const FString ObjectPath = ToObjectPath(Path);
+        const FAssetData AssetData = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(ObjectPath));
+
+        TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+        Item->SetStringField(TEXT("path"), Path);
+        Item->SetBoolField(TEXT("exists"), AssetData.IsValid());
+        if (AssetData.IsValid())
+        {
+            Item->SetStringField(TEXT("class_name"), AssetData.AssetClassPath.GetAssetName().ToString());
+        }
+        else
+        {
+            Item->SetField(TEXT("class_name"), MakeShared<FJsonValueNull>());
+        }
+        Assets.Add(MakeObjectValue(Item));
+    }
+
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("assets"), Assets);
+    ResultData->SetNumberField(TEXT("count"), Assets.Num());
+    return ResultData;
+}
+
+TSharedRef<FJsonObject> MakeGeneratedMeshOperation(
+    const FString& Path,
+    bool bCreated,
+    int32 VertexCount,
+    int32 TriangleCount)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetStringField(TEXT("path"), Path);
+    ResultData->SetBoolField(TEXT("created"), bCreated);
+    ResultData->SetNumberField(TEXT("vertex_count"), VertexCount);
+    ResultData->SetNumberField(TEXT("triangle_count"), TriangleCount);
+    return ResultData;
+}
+
+void AddStaticMeshOperation(
+    TArray<TSharedPtr<FJsonValue>>& Meshes,
+    const FString& Path,
+    bool bChanged,
+    const FString& CollisionTrace)
+{
+    TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+    Item->SetStringField(TEXT("path"), Path);
+    Item->SetBoolField(TEXT("changed"), bChanged);
+    Item->SetStringField(TEXT("collision_trace"), CollisionTrace);
+    Meshes.Add(MakeObjectValue(Item));
+}
+
+TSharedRef<FJsonObject> MakeStaticMeshOperationResult(const TArray<TSharedPtr<FJsonValue>>& Meshes)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("meshes"), Meshes);
+    ResultData->SetNumberField(TEXT("count"), Meshes.Num());
+    return ResultData;
+}
+
+bool ParseCollisionTraceFlag(const FString& CollisionTrace, ECollisionTraceFlag& OutFlag)
+{
+    FString Normalized = CollisionTrace;
+    Normalized.ToLowerInline();
+
+    if (Normalized.IsEmpty() || Normalized == TEXT("project_default"))
+    {
+        OutFlag = CTF_UseDefault;
+        return true;
+    }
+    if (Normalized == TEXT("simple_and_complex"))
+    {
+        OutFlag = CTF_UseSimpleAndComplex;
+        return true;
+    }
+    if (Normalized == TEXT("use_simple_as_complex"))
+    {
+        OutFlag = CTF_UseSimpleAsComplex;
+        return true;
+    }
+    if (Normalized == TEXT("use_complex_as_simple"))
+    {
+        OutFlag = CTF_UseComplexAsSimple;
+        return true;
+    }
+
+    return false;
+}
+
+bool ConfigureStaticMeshCollision(
+    UStaticMesh& StaticMesh,
+    const FString& CollisionTrace,
+    bool bSimpleCollision,
+    FString& OutError)
+{
+    ECollisionTraceFlag TraceFlag = CTF_UseDefault;
+    if (!ParseCollisionTraceFlag(CollisionTrace, TraceFlag))
+    {
+        OutError = FString::Printf(TEXT("unsupported collision_trace '%s'"), *CollisionTrace);
+        return false;
+    }
+
+    StaticMesh.Modify();
+    StaticMesh.CreateBodySetup();
+    UBodySetup* BodySetup = StaticMesh.GetBodySetup();
+    if (!BodySetup)
+    {
+        OutError = FString::Printf(TEXT("failed to create BodySetup for '%s'"), *StaticMesh.GetPathName());
+        return false;
+    }
+
+    BodySetup->Modify();
+    BodySetup->CollisionTraceFlag = TraceFlag;
+    if (bSimpleCollision)
+    {
+        const FBox Bounds = StaticMesh.GetBoundingBox();
+        const FVector Size = Bounds.IsValid ? Bounds.GetSize() : FVector(100.0, 100.0, 100.0);
+        const FVector Center = Bounds.IsValid ? Bounds.GetCenter() : FVector::ZeroVector;
+
+        BodySetup->AggGeom.EmptyElements();
+        FKBoxElem Box;
+        Box.Center = Center;
+        Box.X = FMath::Max(Size.X, 1.0);
+        Box.Y = FMath::Max(Size.Y, 1.0);
+        Box.Z = FMath::Max(Size.Z, 1.0);
+        BodySetup->AggGeom.BoxElems.Add(Box);
+    }
+
+    BodySetup->InvalidatePhysicsData();
+    BodySetup->CreatePhysicsMeshes();
+    StaticMesh.PostEditChange();
+    StaticMesh.MarkPackageDirty();
+    return true;
+}
+
+void AddQuadToMeshDescription(
+    FMeshDescription& MeshDescription,
+    FStaticMeshAttributes& Attributes,
+    FPolygonGroupID PolygonGroup,
+    const FVector3f& A,
+    const FVector3f& B,
+    const FVector3f& C,
+    const FVector3f& D,
+    int32& VertexCount,
+    int32& TriangleCount)
+{
+    TVertexAttributesRef<FVector3f> VertexPositions = Attributes.GetVertexPositions();
+    TVertexInstanceAttributesRef<FVector3f> VertexInstanceNormals = Attributes.GetVertexInstanceNormals();
+    TVertexInstanceAttributesRef<FVector3f> VertexInstanceTangents = Attributes.GetVertexInstanceTangents();
+    TVertexInstanceAttributesRef<float> VertexInstanceBinormalSigns = Attributes.GetVertexInstanceBinormalSigns();
+    TVertexInstanceAttributesRef<FVector4f> VertexInstanceColors = Attributes.GetVertexInstanceColors();
+    TVertexInstanceAttributesRef<FVector2f> VertexInstanceUVs = Attributes.GetVertexInstanceUVs();
+
+    const FVector3f Normal = ((B - A) ^ (C - A)).GetSafeNormal();
+    const FVector3f Tangent = (B - A).GetSafeNormal();
+    const FVector3f Positions[4] = {A, B, C, D};
+    const FVector2f UVs[4] = {
+        FVector2f(0.0f, 0.0f),
+        FVector2f(1.0f, 0.0f),
+        FVector2f(1.0f, 1.0f),
+        FVector2f(0.0f, 1.0f),
+    };
+
+    TArray<FVertexInstanceID> VertexInstanceIDs;
+    VertexInstanceIDs.SetNum(4);
+    for (int32 Index = 0; Index < 4; ++Index)
+    {
+        const FVertexID VertexID = MeshDescription.CreateVertex();
+        VertexPositions[VertexID] = Positions[Index];
+
+        const FVertexInstanceID VertexInstanceID = MeshDescription.CreateVertexInstance(VertexID);
+        VertexInstanceNormals[VertexInstanceID] = Normal;
+        VertexInstanceTangents[VertexInstanceID] = Tangent;
+        VertexInstanceBinormalSigns[VertexInstanceID] = 1.0f;
+        VertexInstanceColors[VertexInstanceID] = FVector4f(1.0f, 1.0f, 1.0f, 1.0f);
+        VertexInstanceUVs.Set(VertexInstanceID, 0, UVs[Index]);
+        VertexInstanceIDs[Index] = VertexInstanceID;
+    }
+
+    MeshDescription.CreatePolygon(PolygonGroup, VertexInstanceIDs);
+    VertexCount += 4;
+    TriangleCount += 2;
+}
+
+void AddBoxToMeshDescription(
+    FMeshDescription& MeshDescription,
+    FStaticMeshAttributes& Attributes,
+    FPolygonGroupID PolygonGroup,
+    const FVector3f& Min,
+    const FVector3f& Max,
+    int32& VertexCount,
+    int32& TriangleCount)
+{
+    AddQuadToMeshDescription(
+        MeshDescription,
+        Attributes,
+        PolygonGroup,
+        FVector3f(Min.X, Min.Y, Min.Z),
+        FVector3f(Max.X, Min.Y, Min.Z),
+        FVector3f(Max.X, Min.Y, Max.Z),
+        FVector3f(Min.X, Min.Y, Max.Z),
+        VertexCount,
+        TriangleCount);
+    AddQuadToMeshDescription(
+        MeshDescription,
+        Attributes,
+        PolygonGroup,
+        FVector3f(Max.X, Max.Y, Min.Z),
+        FVector3f(Min.X, Max.Y, Min.Z),
+        FVector3f(Min.X, Max.Y, Max.Z),
+        FVector3f(Max.X, Max.Y, Max.Z),
+        VertexCount,
+        TriangleCount);
+    AddQuadToMeshDescription(
+        MeshDescription,
+        Attributes,
+        PolygonGroup,
+        FVector3f(Max.X, Min.Y, Min.Z),
+        FVector3f(Max.X, Max.Y, Min.Z),
+        FVector3f(Max.X, Max.Y, Max.Z),
+        FVector3f(Max.X, Min.Y, Max.Z),
+        VertexCount,
+        TriangleCount);
+    AddQuadToMeshDescription(
+        MeshDescription,
+        Attributes,
+        PolygonGroup,
+        FVector3f(Min.X, Max.Y, Min.Z),
+        FVector3f(Min.X, Min.Y, Min.Z),
+        FVector3f(Min.X, Min.Y, Max.Z),
+        FVector3f(Min.X, Max.Y, Max.Z),
+        VertexCount,
+        TriangleCount);
+    AddQuadToMeshDescription(
+        MeshDescription,
+        Attributes,
+        PolygonGroup,
+        FVector3f(Min.X, Min.Y, Max.Z),
+        FVector3f(Max.X, Min.Y, Max.Z),
+        FVector3f(Max.X, Max.Y, Max.Z),
+        FVector3f(Min.X, Max.Y, Max.Z),
+        VertexCount,
+        TriangleCount);
+    AddQuadToMeshDescription(
+        MeshDescription,
+        Attributes,
+        PolygonGroup,
+        FVector3f(Min.X, Max.Y, Min.Z),
+        FVector3f(Max.X, Max.Y, Min.Z),
+        FVector3f(Max.X, Min.Y, Min.Z),
+        FVector3f(Min.X, Min.Y, Min.Z),
+        VertexCount,
+        TriangleCount);
+}
+
+bool CreateOrUpdateGeneratedStaticMesh(
+    const FString& Path,
+    FMeshDescription& MeshDescription,
+    UMaterialInterface* Material,
+    int32 VertexCount,
+    int32 TriangleCount,
+    UStaticMesh*& OutStaticMesh,
+    bool& bOutCreated,
+    FString& OutError)
+{
+    FString PackagePath;
+    FString AssetName;
+    if (!SplitAssetPath(Path, PackagePath, AssetName, OutError))
+    {
+        return false;
+    }
+
+    bOutCreated = false;
+    OutStaticMesh = LoadObject<UStaticMesh>(nullptr, *ToObjectPath(Path));
+    if (!OutStaticMesh)
+    {
+        UObject* ExistingObject = StaticFindObject(UObject::StaticClass(), nullptr, *ToObjectPath(Path));
+        if (ExistingObject)
+        {
+            OutError = FString::Printf(TEXT("asset '%s' exists but is not a StaticMesh"), *Path);
+            return false;
+        }
+
+        UPackage* Package = CreatePackage(*(PackagePath / AssetName));
+        OutStaticMesh = NewObject<UStaticMesh>(Package, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
+        bOutCreated = true;
+    }
+
+    if (!OutStaticMesh)
+    {
+        OutError = FString::Printf(TEXT("failed to create static mesh '%s'"), *Path);
+        return false;
+    }
+
+    UMaterialInterface* MeshMaterial = Material ? Material : UMaterial::GetDefaultMaterial(MD_Surface);
+    OutStaticMesh->Modify();
+    OutStaticMesh->SetNumSourceModels(0);
+    FStaticMeshSourceModel& SourceModel = OutStaticMesh->AddSourceModel();
+    SourceModel.BuildSettings.bRecomputeNormals = false;
+    SourceModel.BuildSettings.bRecomputeTangents = false;
+    SourceModel.BuildSettings.bRemoveDegenerates = true;
+    SourceModel.BuildSettings.bUseFullPrecisionUVs = false;
+
+    TArray<FStaticMaterial> StaticMaterials;
+    StaticMaterials.Add(FStaticMaterial(MeshMaterial, TEXT("Generated"), TEXT("Generated")));
+    OutStaticMesh->SetStaticMaterials(StaticMaterials);
+    OutStaticMesh->CreateMeshDescription(0, MeshDescription);
+    OutStaticMesh->CommitMeshDescription(0);
+
+    FMeshSectionInfo SectionInfo = OutStaticMesh->GetSectionInfoMap().Get(0, 0);
+    SectionInfo.MaterialIndex = 0;
+    SectionInfo.bEnableCollision = true;
+    OutStaticMesh->GetSectionInfoMap().Set(0, 0, SectionInfo);
+    OutStaticMesh->GetOriginalSectionInfoMap().Set(0, 0, SectionInfo);
+    OutStaticMesh->SetLightMapCoordinateIndex(0);
+    OutStaticMesh->SetLightMapResolution(64);
+    OutStaticMesh->SetImportVersion(EImportStaticMeshVersion::LastVersion);
+    OutStaticMesh->Build();
+    OutStaticMesh->PostEditChange();
+    OutStaticMesh->MarkPackageDirty();
+    if (UPackage* Package = OutStaticMesh->GetOutermost())
+    {
+        Package->MarkPackageDirty();
+    }
+    if (bOutCreated)
+    {
+        FAssetRegistryModule::AssetCreated(OutStaticMesh);
+    }
+
+    FString CollisionError;
+    ConfigureStaticMeshCollision(*OutStaticMesh, TEXT("use_simple_as_complex"), true, CollisionError);
+    return VertexCount > 0 && TriangleCount > 0;
+}
+
+bool BuildBuildingMeshDescription(
+    const TSharedPtr<FJsonObject>& SpecData,
+    FMeshDescription& MeshDescription,
+    int32& OutVertexCount,
+    int32& OutTriangleCount,
+    FString& OutError)
+{
+    double Width = 800.0;
+    double Depth = 600.0;
+    double Height = 2400.0;
+    int32 Floors = 12;
+    int32 WindowRows = 12;
+    int32 WindowColumns = 6;
+    SpecData->TryGetNumberField(TEXT("width"), Width);
+    SpecData->TryGetNumberField(TEXT("depth"), Depth);
+    SpecData->TryGetNumberField(TEXT("height"), Height);
+    SpecData->TryGetNumberField(TEXT("floors"), Floors);
+    SpecData->TryGetNumberField(TEXT("window_rows"), WindowRows);
+    SpecData->TryGetNumberField(TEXT("window_columns"), WindowColumns);
+
+    Width = FMath::Max(Width, 1.0);
+    Depth = FMath::Max(Depth, 1.0);
+    Height = FMath::Max(Height, 1.0);
+    Floors = FMath::Max(Floors, 1);
+    WindowRows = FMath::Clamp(WindowRows <= 0 ? Floors : WindowRows, 0, 200);
+    WindowColumns = FMath::Clamp(WindowColumns, 0, 200);
+
+    FStaticMeshAttributes Attributes(MeshDescription);
+    Attributes.Register();
+    Attributes.GetVertexInstanceUVs().SetNumChannels(1);
+    TPolygonGroupAttributesRef<FName> MaterialSlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
+    const FPolygonGroupID PolygonGroup = MeshDescription.CreatePolygonGroup();
+    MaterialSlotNames[PolygonGroup] = TEXT("Generated");
+
+    OutVertexCount = 0;
+    OutTriangleCount = 0;
+    const float HalfWidth = static_cast<float>(Width * 0.5);
+    const float HalfDepth = static_cast<float>(Depth * 0.5);
+    AddBoxToMeshDescription(
+        MeshDescription,
+        Attributes,
+        PolygonGroup,
+        FVector3f(-HalfWidth, -HalfDepth, 0.0f),
+        FVector3f(HalfWidth, HalfDepth, static_cast<float>(Height)),
+        OutVertexCount,
+        OutTriangleCount);
+
+    if (WindowRows > 0 && WindowColumns > 0)
+    {
+        const float FloorHeight = static_cast<float>(Height / WindowRows);
+        const float ColumnWidth = static_cast<float>(Width / WindowColumns);
+        const float WindowWidth = ColumnWidth * 0.42f;
+        const float WindowHeight = FloorHeight * 0.35f;
+        const float WindowDepth = 8.0f;
+
+        for (int32 Row = 0; Row < WindowRows; ++Row)
+        {
+            const float CenterZ = FloorHeight * (Row + 0.55f);
+            for (int32 Column = 0; Column < WindowColumns; ++Column)
+            {
+                const float CenterX = -HalfWidth + ColumnWidth * (Column + 0.5f);
+                AddBoxToMeshDescription(
+                    MeshDescription,
+                    Attributes,
+                    PolygonGroup,
+                    FVector3f(CenterX - WindowWidth * 0.5f, -HalfDepth - WindowDepth, CenterZ - WindowHeight * 0.5f),
+                    FVector3f(CenterX + WindowWidth * 0.5f, -HalfDepth, CenterZ + WindowHeight * 0.5f),
+                    OutVertexCount,
+                    OutTriangleCount);
+            }
+        }
+    }
+
+    return true;
+}
+
+bool BuildSignMeshDescription(
+    const TSharedPtr<FJsonObject>& SpecData,
+    FMeshDescription& MeshDescription,
+    int32& OutVertexCount,
+    int32& OutTriangleCount,
+    FString& OutError)
+{
+    double Width = 900.0;
+    double Height = 240.0;
+    double Depth = 30.0;
+    SpecData->TryGetNumberField(TEXT("width"), Width);
+    SpecData->TryGetNumberField(TEXT("height"), Height);
+    SpecData->TryGetNumberField(TEXT("depth"), Depth);
+
+    Width = FMath::Max(Width, 1.0);
+    Height = FMath::Max(Height, 1.0);
+    Depth = FMath::Max(Depth, 1.0);
+
+    FStaticMeshAttributes Attributes(MeshDescription);
+    Attributes.Register();
+    Attributes.GetVertexInstanceUVs().SetNumChannels(1);
+    TPolygonGroupAttributesRef<FName> MaterialSlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
+    const FPolygonGroupID PolygonGroup = MeshDescription.CreatePolygonGroup();
+    MaterialSlotNames[PolygonGroup] = TEXT("Generated");
+
+    OutVertexCount = 0;
+    OutTriangleCount = 0;
+    AddBoxToMeshDescription(
+        MeshDescription,
+        Attributes,
+        PolygonGroup,
+        FVector3f(static_cast<float>(Width * -0.5), static_cast<float>(Depth * -0.5), 0.0f),
+        FVector3f(static_cast<float>(Width * 0.5), static_cast<float>(Depth * 0.5), static_cast<float>(Height)),
+        OutVertexCount,
+        OutTriangleCount);
+    return true;
+}
+
+bool ImportAssetFromSpec(
+    const TSharedPtr<FJsonObject>& SpecData,
+    const FString& ForcedKind,
+    TArray<TSharedPtr<FJsonValue>>& Assets,
+    FString& OutFatalError)
+{
+    FString SourceFile;
+    FString DestinationPath;
+    if (!SpecData->TryGetStringField(TEXT("source_file"), SourceFile) || SourceFile.IsEmpty() ||
+        !SpecData->TryGetStringField(TEXT("destination_path"), DestinationPath) || DestinationPath.IsEmpty())
+    {
+        OutFatalError = TEXT("asset import requires source_file and destination_path");
+        return false;
+    }
+
+    FString PackagePath;
+    FString AssetName;
+    FString PathError;
+    if (!SplitAssetPath(DestinationPath, PackagePath, AssetName, PathError))
+    {
+        OutFatalError = PathError;
+        return false;
+    }
+
+    FString Kind = ForcedKind;
+    if (Kind.IsEmpty())
+    {
+        SpecData->TryGetStringField(TEXT("kind"), Kind);
+    }
+    Kind.ToLowerInline();
+    if (Kind != TEXT("texture") && Kind != TEXT("static_mesh"))
+    {
+        OutFatalError = FString::Printf(TEXT("unsupported asset import kind '%s'"), *Kind);
+        return false;
+    }
+
+    bool bReplaceExisting = false;
+    bool bSave = false;
+    bool bGenerateCollision = Kind == TEXT("static_mesh");
+    SpecData->TryGetBoolField(TEXT("replace_existing"), bReplaceExisting);
+    SpecData->TryGetBoolField(TEXT("save"), bSave);
+    SpecData->TryGetBoolField(TEXT("generate_collision"), bGenerateCollision);
+
+    if (!FPaths::FileExists(SourceFile))
+    {
+        AddAssetImportOperation(Assets, SourceFile, DestinationPath, FString(), false, TEXT("source file does not exist"));
+        return true;
+    }
+
+    UObject* ExistingAsset = LoadObject<UObject>(nullptr, *ToObjectPath(DestinationPath));
+    if (ExistingAsset && !bReplaceExisting)
+    {
+        AddAssetImportOperation(Assets, SourceFile, DestinationPath, ExistingAsset->GetClass()->GetName(), false, TEXT("asset already exists"));
+        return true;
+    }
+
+    UAssetImportTask* Task = NewObject<UAssetImportTask>();
+    Task->AddToRoot();
+    Task->Filename = SourceFile;
+    Task->DestinationPath = PackagePath;
+    Task->DestinationName = AssetName;
+    Task->bReplaceExisting = bReplaceExisting;
+    Task->bReplaceExistingSettings = bReplaceExisting;
+    Task->bAutomated = true;
+    Task->bSave = bSave;
+    Task->bAsync = false;
+
+    TArray<UAssetImportTask*> Tasks;
+    Tasks.Add(Task);
+    FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+    AssetToolsModule.Get().ImportAssetTasks(Tasks);
+
+    UObject* ImportedAsset = nullptr;
+    for (UObject* Object : Task->GetObjects())
+    {
+        if ((Kind == TEXT("texture") && Object && Object->IsA<UTexture2D>()) ||
+            (Kind == TEXT("static_mesh") && Object && Object->IsA<UStaticMesh>()))
+        {
+            ImportedAsset = Object;
+            break;
+        }
+    }
+
+    if (!ImportedAsset)
+    {
+        ImportedAsset = LoadObject<UObject>(nullptr, *ToObjectPath(DestinationPath));
+    }
+
+    Task->RemoveFromRoot();
+
+    if (!ImportedAsset)
+    {
+        AddAssetImportOperation(Assets, SourceFile, DestinationPath, FString(), false, TEXT("import failed"));
+        return true;
+    }
+
+    if (UTexture2D* Texture = Cast<UTexture2D>(ImportedAsset))
+    {
+        bool bSRGB = Texture->SRGB;
+        if (SpecData->TryGetBoolField(TEXT("srgb"), bSRGB))
+        {
+            Texture->Modify();
+            Texture->SRGB = bSRGB;
+            Texture->PostEditChange();
+            Texture->MarkPackageDirty();
+        }
+    }
+    else if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(ImportedAsset); StaticMesh && bGenerateCollision)
+    {
+        FString CollisionError;
+        ConfigureStaticMeshCollision(*StaticMesh, TEXT("use_simple_as_complex"), true, CollisionError);
+    }
+
+    ImportedAsset->MarkPackageDirty();
+    AddAssetImportOperation(Assets, SourceFile, DestinationPath, ImportedAsset->GetClass()->GetName(), true, FString());
+    return true;
 }
 
 void AddGeneratedLightingTags(AActor& Actor, const TArray<FString>& ExtraTags = TArray<FString>())
@@ -1864,6 +2473,13 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         CommandNames.Add(MakeStringValue(TEXT("world.query")));
         CommandNames.Add(MakeStringValue(TEXT("world.snapshot")));
         CommandNames.Add(MakeStringValue(TEXT("asset.create_folder")));
+        CommandNames.Add(MakeStringValue(TEXT("asset.import_texture")));
+        CommandNames.Add(MakeStringValue(TEXT("asset.import_static_mesh")));
+        CommandNames.Add(MakeStringValue(TEXT("asset.bulk_import")));
+        CommandNames.Add(MakeStringValue(TEXT("asset.validate")));
+        CommandNames.Add(MakeStringValue(TEXT("mesh.create_building")));
+        CommandNames.Add(MakeStringValue(TEXT("mesh.create_sign")));
+        CommandNames.Add(MakeStringValue(TEXT("static_mesh.set_collision")));
         CommandNames.Add(MakeStringValue(TEXT("material.create")));
         CommandNames.Add(MakeStringValue(TEXT("material.create_instance")));
         CommandNames.Add(MakeStringValue(TEXT("material.create_procedural_texture")));
@@ -2044,7 +2660,7 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
                 continue;
             }
 
-            UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
+            UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *ToObjectPath(MeshPath));
             if (!Mesh)
             {
                 continue;
@@ -2211,6 +2827,153 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         const FString FolderPath = FPackageName::LongPackageNameToFilename(Path);
         const bool bCreated = IFileManager::Get().MakeDirectory(*FolderPath, true);
         return MakeTaggedResult(TEXT("asset_operation"), MakeAssetOperation(Path, bCreated));
+    }
+
+    if (CommandType == TEXT("asset_import_texture") || CommandType == TEXT("asset_import_static_mesh"))
+    {
+        const FString ForcedKind = CommandType == TEXT("asset_import_texture") ? TEXT("texture") : TEXT("static_mesh");
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        TArray<TSharedPtr<FJsonValue>> Assets;
+        FString ImportError;
+        if (!ImportAssetFromSpec(SpecData, ForcedKind, Assets, ImportError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), ImportError);
+            return nullptr;
+        }
+
+        return MakeTaggedResult(TEXT("asset_import"), MakeAssetImportResult(Assets));
+    }
+
+    if (CommandType == TEXT("asset_bulk_import"))
+    {
+        const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+        if (!Data->TryGetArrayField(TEXT("items"), Items))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("asset.bulk_import requires data.items"));
+            return nullptr;
+        }
+
+        TArray<TSharedPtr<FJsonValue>> Assets;
+        for (const TSharedPtr<FJsonValue>& ItemValue : *Items)
+        {
+            const TSharedPtr<FJsonObject>* Item = nullptr;
+            if (!ItemValue.IsValid() || !ItemValue->TryGetObject(Item) || Item == nullptr || !Item->IsValid())
+            {
+                AddAssetImportOperation(Assets, FString(), FString(), FString(), false, TEXT("item is not an object"));
+                continue;
+            }
+
+            FString ImportError;
+            if (!ImportAssetFromSpec(*Item, FString(), Assets, ImportError))
+            {
+                FString SourceFile;
+                FString DestinationPath;
+                (*Item)->TryGetStringField(TEXT("source_file"), SourceFile);
+                (*Item)->TryGetStringField(TEXT("destination_path"), DestinationPath);
+                AddAssetImportOperation(Assets, SourceFile, DestinationPath, FString(), false, ImportError);
+            }
+        }
+
+        return MakeTaggedResult(TEXT("asset_import"), MakeAssetImportResult(Assets));
+    }
+
+    if (CommandType == TEXT("asset_validate"))
+    {
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        const TArray<FString> Paths = ReadStringArrayField(SpecData, TEXT("paths"));
+        if (Paths.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("asset.validate requires data.paths"));
+            return nullptr;
+        }
+
+        return MakeTaggedResult(TEXT("asset_validation"), MakeAssetValidationResult(Paths));
+    }
+
+    if (CommandType == TEXT("mesh_create_building") || CommandType == TEXT("mesh_create_sign"))
+    {
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        FString Path;
+        if (!SpecData->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("generated mesh creation requires data.path"));
+            return nullptr;
+        }
+
+        UMaterialInterface* Material = nullptr;
+        FString MaterialPath;
+        if (SpecData->TryGetStringField(TEXT("material"), MaterialPath) && !MaterialPath.IsEmpty())
+        {
+            Material = LoadObject<UMaterialInterface>(nullptr, *ToObjectPath(MaterialPath));
+            if (!Material)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to load material '%s'"), *MaterialPath));
+                return nullptr;
+            }
+        }
+
+        FMeshDescription MeshDescription;
+        int32 VertexCount = 0;
+        int32 TriangleCount = 0;
+        FString MeshError;
+        const bool bBuilt = CommandType == TEXT("mesh_create_building")
+            ? BuildBuildingMeshDescription(SpecData, MeshDescription, VertexCount, TriangleCount, MeshError)
+            : BuildSignMeshDescription(SpecData, MeshDescription, VertexCount, TriangleCount, MeshError);
+        if (!bBuilt)
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), MeshError);
+            return nullptr;
+        }
+
+        UStaticMesh* StaticMesh = nullptr;
+        bool bCreated = false;
+        if (!CreateOrUpdateGeneratedStaticMesh(Path, MeshDescription, Material, VertexCount, TriangleCount, StaticMesh, bCreated, MeshError))
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), MeshError);
+            return nullptr;
+        }
+
+        return MakeTaggedResult(TEXT("generated_mesh"), MakeGeneratedMeshOperation(Path, bCreated, VertexCount, TriangleCount));
+    }
+
+    if (CommandType == TEXT("static_mesh_set_collision"))
+    {
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        const TArray<FString> Paths = ReadStringArrayField(SpecData, TEXT("paths"));
+        if (Paths.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("static_mesh.set_collision requires data.paths"));
+            return nullptr;
+        }
+
+        FString CollisionTrace = TEXT("project_default");
+        bool bSimpleCollision = true;
+        bool bRebuild = true;
+        SpecData->TryGetStringField(TEXT("collision_trace"), CollisionTrace);
+        SpecData->TryGetBoolField(TEXT("simple_collision"), bSimpleCollision);
+        SpecData->TryGetBoolField(TEXT("rebuild"), bRebuild);
+
+        TArray<TSharedPtr<FJsonValue>> Meshes;
+        for (const FString& Path : Paths)
+        {
+            UStaticMesh* StaticMesh = LoadObject<UStaticMesh>(nullptr, *ToObjectPath(Path));
+            if (!StaticMesh)
+            {
+                AddStaticMeshOperation(Meshes, Path, false, CollisionTrace);
+                continue;
+            }
+
+            FString CollisionError;
+            const bool bChanged = ConfigureStaticMeshCollision(*StaticMesh, CollisionTrace, bSimpleCollision, CollisionError);
+            if (bChanged && bRebuild)
+            {
+                StaticMesh->Build();
+                StaticMesh->PostEditChange();
+            }
+            AddStaticMeshOperation(Meshes, Path, bChanged, CollisionTrace);
+        }
+
+        return MakeTaggedResult(TEXT("static_mesh_operation"), MakeStaticMeshOperationResult(Meshes));
     }
 
     if (CommandType == TEXT("material_create"))
@@ -3210,7 +3973,7 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         }
 
         UBlueprint* Blueprint = LoadBlueprintAsset(BlueprintPath);
-        UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
+        UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *ToObjectPath(MeshPath));
         if (!Blueprint || !Mesh)
         {
             OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to load Blueprint or static mesh"));

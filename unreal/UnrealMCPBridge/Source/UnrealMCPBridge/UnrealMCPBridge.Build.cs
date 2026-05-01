@@ -25,9 +25,11 @@ public class UnrealMCPBridge : ModuleRules
             "KismetCompiler",
             "Landscape",
             "MaterialEditor",
+            "MeshDescription",
             "Networking",
             "Projects",
             "Sockets",
+            "StaticMeshDescription",
             "UnrealEd"
         });
     }

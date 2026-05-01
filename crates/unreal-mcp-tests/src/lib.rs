@@ -200,6 +200,7 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     path: spec.destination_path,
                     class_name: "Texture2D".to_string(),
                     imported: true,
+                    message: None,
                 }],
                 count: 1,
             }),
@@ -210,6 +211,7 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                         path: spec.destination_path,
                         class_name: "StaticMesh".to_string(),
                         imported: true,
+                        message: None,
                     }],
                     count: 1,
                 })
@@ -226,6 +228,7 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                             "Texture2D".to_string()
                         },
                         imported: true,
+                        message: None,
                     })
                     .collect::<Vec<_>>();
                 CommandResult::AssetImport(AssetImportResult {
