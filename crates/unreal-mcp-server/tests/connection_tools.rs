@@ -51,6 +51,43 @@ async fn connection_tools_return_compact_ping_response() {
 }
 
 #[tokio::test]
+async fn connection_tools_return_compact_status_response() {
+    let fake = start_fake_bridge().await.expect("fake bridge");
+    let tools = ConnectionTools::new(BridgeClient::new(fake.address().to_string()));
+
+    let response: ToolResponse = tools.status().await.expect("status response");
+
+    assert_eq!(response.tool_name, "connection.status");
+    assert!(response.summary.contains("connected"));
+    assert_eq!(response.data["connected"].as_bool(), Some(true));
+    assert_eq!(response.data["bridge_version"].as_str(), Some("fake-0.1.0"));
+    assert_eq!(response.data["unreal_version"].as_str(), Some("fake-unreal"));
+    assert!(response.data["elapsed_ms"].is_number());
+}
+
+#[tokio::test]
+async fn connection_tools_return_compact_capabilities_response() {
+    let fake = start_fake_bridge().await.expect("fake bridge");
+    let tools = ConnectionTools::new(BridgeClient::new(fake.address().to_string()));
+
+    let response: ToolResponse = tools.capabilities().await.expect("capabilities response");
+
+    assert_eq!(response.tool_name, "connection.capabilities");
+    assert!(response.summary.contains("3 commands"));
+    assert_eq!(
+        response.data["commands"]
+            .as_array()
+            .expect("commands should be an array")
+            .len(),
+        3
+    );
+    assert_eq!(
+        response.data["commands"][0].as_str(),
+        Some("connection.ping")
+    );
+}
+
+#[tokio::test]
 async fn connection_tools_reject_unexpected_ping_result() {
     let (address, bridge_task) = start_single_response_bridge(ResponseEnvelope::success(
         1,
