@@ -7,7 +7,12 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    let bridge_address =
+        std::env::var("UNREAL_MCP_BRIDGE_ADDR").unwrap_or_else(|_| "127.0.0.1:55557".to_string());
+    let tools = unreal_mcp_server::ConnectionTools::new(unreal_mcp_server::BridgeClient::new(
+        bridge_address,
+    ));
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    unreal_mcp_server::mcp_stdio::run_stdio_server(stdin, stdout).await
+    unreal_mcp_server::mcp_stdio::run_stdio_server(stdin, stdout, tools).await
 }
