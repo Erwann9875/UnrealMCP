@@ -12,6 +12,7 @@
 #include "Components/PointLightComponent.h"
 #include "Components/PostProcessComponent.h"
 #include "Components/RectLightComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/SkyAtmosphereComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -69,6 +70,7 @@
 #include "Sockets.h"
 #include "ScopedTransaction.h"
 #include "UObject/SavePackage.h"
+#include "Runtime/UnrealMCPGameplayRuntimeComponents.h"
 #include "Runtime/UnrealMCPRuntimeAnimationPreset.h"
 #include "Runtime/UnrealMCPRuntimeAnimatorComponent.h"
 #include "StaticMeshAttributes.h"
@@ -775,6 +777,52 @@ TSharedRef<FJsonObject> MakeGameplayOperationResult(
     return ResultData;
 }
 
+struct FGameplayRuntimeCounts
+{
+    int32 CollectibleCount = 0;
+    int32 CheckpointCount = 0;
+    int32 InteractionCount = 0;
+    int32 ObjectiveCount = 0;
+};
+
+void AddGameplayRuntimeBinding(
+    TArray<TSharedPtr<FJsonValue>>& Bindings,
+    const AActor& Actor,
+    const UActorComponent& Component)
+{
+    TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+    Item->SetStringField(TEXT("name"), Actor.GetActorLabel());
+    Item->SetStringField(TEXT("path"), Actor.GetPathName());
+    Item->SetStringField(TEXT("component"), Component.GetName());
+    Bindings.Add(MakeObjectValue(Item));
+}
+
+TSharedRef<FJsonObject> MakeGameplayRuntimeOperationResult(
+    const AActor* Manager,
+    const TArray<TSharedPtr<FJsonValue>>& Bindings,
+    const FGameplayRuntimeCounts& Counts)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    if (Manager)
+    {
+        TSharedRef<FJsonObject> ManagerData = MakeShared<FJsonObject>();
+        ManagerData->SetStringField(TEXT("name"), Manager->GetActorLabel());
+        ManagerData->SetStringField(TEXT("path"), Manager->GetPathName());
+        ResultData->SetObjectField(TEXT("manager"), ManagerData);
+    }
+    else
+    {
+        ResultData->SetField(TEXT("manager"), MakeShared<FJsonValueNull>());
+    }
+    ResultData->SetArrayField(TEXT("bindings"), Bindings);
+    ResultData->SetNumberField(TEXT("count"), Bindings.Num());
+    ResultData->SetNumberField(TEXT("collectible_count"), Counts.CollectibleCount);
+    ResultData->SetNumberField(TEXT("checkpoint_count"), Counts.CheckpointCount);
+    ResultData->SetNumberField(TEXT("interaction_count"), Counts.InteractionCount);
+    ResultData->SetNumberField(TEXT("objective_count"), Counts.ObjectiveCount);
+    return ResultData;
+}
+
 void AddGameplayTags(
     AActor& Actor,
     const FString& Scene,
@@ -803,6 +851,84 @@ void AddGameplayTags(
             Actor.Tags.AddUnique(FName(*Tag));
         }
     }
+}
+
+void AddGameplayRuntimeTags(
+    AActor& Actor,
+    const FString& Scene,
+    const FString& Group,
+    const TArray<FString>& ExtraTags = TArray<FString>())
+{
+    Actor.Tags.AddUnique(TEXT("mcp.generated"));
+    Actor.Tags.AddUnique(TEXT("mcp.gameplay_runtime"));
+    if (!Scene.IsEmpty())
+    {
+        Actor.Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.scene:%s"), *Scene)));
+    }
+    if (!Group.IsEmpty())
+    {
+        Actor.Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.group:%s"), *Group)));
+    }
+    for (const FString& Tag : ExtraTags)
+    {
+        if (!Tag.IsEmpty())
+        {
+            Actor.Tags.AddUnique(FName(*Tag));
+        }
+    }
+}
+
+template <typename TComponent>
+TComponent* FindOrCreateActorComponent(AActor& Actor, const FName& ComponentName, bool& bOutCreated)
+{
+    bOutCreated = false;
+    if (TComponent* Existing = Actor.FindComponentByClass<TComponent>())
+    {
+        return Existing;
+    }
+
+    TComponent* Component = NewObject<TComponent>(&Actor, ComponentName, RF_Transactional);
+    if (!Component)
+    {
+        return nullptr;
+    }
+
+    Actor.AddInstanceComponent(Component);
+    Component->RegisterComponent();
+    bOutCreated = true;
+    return Component;
+}
+
+bool TryReadActorTagValue(const AActor& Actor, const FString& Prefix, FString& OutValue)
+{
+    for (const FName& Tag : Actor.Tags)
+    {
+        const FString TagString = Tag.ToString();
+        if (TagString.StartsWith(Prefix))
+        {
+            OutValue = TagString.RightChop(Prefix.Len());
+            return !OutValue.IsEmpty();
+        }
+    }
+
+    return false;
+}
+
+FString ReadActorTagValueOrDefault(const AActor& Actor, const FString& Prefix, const FString& DefaultValue)
+{
+    FString Value;
+    return TryReadActorTagValue(Actor, Prefix, Value) ? Value : DefaultValue;
+}
+
+int32 ReadActorTagIntOrDefault(const AActor& Actor, const FString& Prefix, int32 DefaultValue)
+{
+    FString Value;
+    if (!TryReadActorTagValue(Actor, Prefix, Value))
+    {
+        return DefaultValue;
+    }
+
+    return FCString::Atoi(*Value);
 }
 
 bool SpawnGameplayStaticMeshActor(
@@ -3657,6 +3783,11 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         CommandNames.Add(MakeStringValue(TEXT("game.create_interaction")));
         CommandNames.Add(MakeStringValue(TEXT("game.create_collectibles")));
         CommandNames.Add(MakeStringValue(TEXT("game.create_objective_flow")));
+        CommandNames.Add(MakeStringValue(TEXT("gameplay.create_system")));
+        CommandNames.Add(MakeStringValue(TEXT("gameplay.bind_collectibles")));
+        CommandNames.Add(MakeStringValue(TEXT("gameplay.bind_checkpoints")));
+        CommandNames.Add(MakeStringValue(TEXT("gameplay.bind_interactions")));
+        CommandNames.Add(MakeStringValue(TEXT("gameplay.bind_objective_flow")));
 
         TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
         ResultData->SetArrayField(TEXT("commands"), CommandNames);
@@ -5564,6 +5695,233 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
 
         World->MarkPackageDirty();
         return MakeTaggedResult(TEXT("gameplay_operation"), MakeGameplayOperationResult(Spawned, Counts));
+    }
+
+    if (CommandType == TEXT("gameplay_create_system"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world"));
+            return nullptr;
+        }
+
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        FString Name;
+        if (!SpecData->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("gameplay runtime system requires name"));
+            return nullptr;
+        }
+
+        FVector Location = FVector::ZeroVector;
+        if (!ReadVectorField(SpecData, TEXT("location"), FVector::ZeroVector, Location))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("gameplay runtime system location must have 3 numbers"));
+            return nullptr;
+        }
+
+        FString Scene;
+        SpecData->TryGetStringField(TEXT("scene"), Scene);
+        FString Group;
+        SpecData->TryGetStringField(TEXT("group"), Group);
+        const TArray<FString> Tags = ReadStringArrayField(SpecData, TEXT("tags"));
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "GameplayRuntimeCreateSystem", "MCP Gameplay Runtime System"));
+        AActor* ManagerActor = FindActorByLabel<AActor>(*World, Name);
+        if (!ManagerActor)
+        {
+            FActorSpawnParameters SpawnParameters;
+            SpawnParameters.Name = MakeUniqueObjectName(World, AActor::StaticClass(), FName(*Name));
+            ManagerActor = World->SpawnActor<AActor>(Location, FRotator::ZeroRotator, SpawnParameters);
+            if (!ManagerActor)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to create gameplay runtime manager"));
+                return nullptr;
+            }
+            ManagerActor->SetActorLabel(Name);
+        }
+
+        ManagerActor->Modify();
+        if (!ManagerActor->GetRootComponent())
+        {
+            USceneComponent* RootComponent = NewObject<USceneComponent>(ManagerActor, TEXT("MCP_GameplayManagerRoot"), RF_Transactional);
+            if (!RootComponent)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to create gameplay manager root component"));
+                return nullptr;
+            }
+
+            ManagerActor->SetRootComponent(RootComponent);
+            ManagerActor->AddInstanceComponent(RootComponent);
+            RootComponent->RegisterComponent();
+        }
+        ManagerActor->SetActorLocation(Location);
+        AddGameplayRuntimeTags(*ManagerActor, Scene, Group, Tags);
+
+        bool bCreated = false;
+        UUnrealMCPGameplayManagerComponent* ManagerComponent =
+            FindOrCreateActorComponent<UUnrealMCPGameplayManagerComponent>(*ManagerActor, TEXT("MCP_GameplayManagerRuntime"), bCreated);
+        if (!ManagerComponent)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to create gameplay manager component"));
+            return nullptr;
+        }
+        ManagerComponent->Modify();
+
+        TArray<TSharedPtr<FJsonValue>> Bindings;
+        FGameplayRuntimeCounts Counts;
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("gameplay_runtime_operation"), MakeGameplayRuntimeOperationResult(ManagerActor, Bindings, Counts));
+    }
+
+    if (CommandType == TEXT("gameplay_bind_collectibles") ||
+        CommandType == TEXT("gameplay_bind_checkpoints") ||
+        CommandType == TEXT("gameplay_bind_interactions") ||
+        CommandType == TEXT("gameplay_bind_objective_flow"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world"));
+            return nullptr;
+        }
+
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        TArray<FString> Names = ReadStringArrayField(SpecData, TEXT("names"));
+        TArray<FString> Tags = ReadStringArrayField(SpecData, TEXT("tags"));
+        if (Names.IsEmpty() && Tags.IsEmpty())
+        {
+            if (CommandType == TEXT("gameplay_bind_collectibles"))
+            {
+                Tags.Add(TEXT("mcp.gameplay_actor:collectible"));
+            }
+            else if (CommandType == TEXT("gameplay_bind_checkpoints"))
+            {
+                Tags.Add(TEXT("mcp.gameplay_actor:checkpoint"));
+            }
+            else if (CommandType == TEXT("gameplay_bind_interactions"))
+            {
+                Tags.Add(TEXT("mcp.gameplay_actor:interaction"));
+            }
+            else
+            {
+                Tags.Add(TEXT("mcp.gameplay_actor:objective"));
+            }
+        }
+        bool bIncludeGenerated = false;
+        SpecData->TryGetBoolField(TEXT("include_generated"), bIncludeGenerated);
+        if (bIncludeGenerated && Names.IsEmpty() && Tags.IsEmpty())
+        {
+            Tags.Add(TEXT("mcp.generated"));
+        }
+
+        FString ManagerName = TEXT("MCP_GameplayManager");
+        SpecData->TryGetStringField(TEXT("manager_name"), ManagerName);
+        if (ManagerName.IsEmpty())
+        {
+            ManagerName = TEXT("MCP_GameplayManager");
+        }
+
+        int32 CollectibleValue = 1;
+        SpecData->TryGetNumberField(TEXT("value"), CollectibleValue);
+        bool bDestroyOnCollect = true;
+        SpecData->TryGetBoolField(TEXT("destroy_on_collect"), bDestroyOnCollect);
+
+        TArray<TSharedPtr<FJsonValue>> Bindings;
+        FGameplayRuntimeCounts Counts;
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "GameplayRuntimeBind", "MCP Gameplay Runtime Bindings"));
+
+        for (TActorIterator<AActor> It(World); It; ++It)
+        {
+            AActor* Actor = *It;
+            if (!IsValid(Actor) || Actor->ActorHasTag(TEXT("mcp.gameplay_runtime")) || !ActorMatches(*Actor, Names, Tags))
+            {
+                continue;
+            }
+
+            Actor->Modify();
+            if (CommandType == TEXT("gameplay_bind_collectibles"))
+            {
+                bool bCreated = false;
+                UUnrealMCPCollectibleComponent* Component =
+                    FindOrCreateActorComponent<UUnrealMCPCollectibleComponent>(*Actor, TEXT("MCP_CollectibleRuntime"), bCreated);
+                if (!Component)
+                {
+                    continue;
+                }
+
+                Component->Modify();
+                Component->ManagerActorLabel = FName(*ManagerName);
+                Component->CollectibleId = FName(*Actor->GetActorLabel());
+                Component->Value = ReadActorTagIntOrDefault(*Actor, TEXT("mcp.value:"), CollectibleValue);
+                Component->bDestroyOnCollect = bDestroyOnCollect;
+                Actor->Tags.AddUnique(TEXT("mcp.runtime:collectible"));
+                AddGameplayRuntimeBinding(Bindings, *Actor, *Component);
+                ++Counts.CollectibleCount;
+            }
+            else if (CommandType == TEXT("gameplay_bind_checkpoints"))
+            {
+                bool bCreated = false;
+                UUnrealMCPCheckpointComponent* Component =
+                    FindOrCreateActorComponent<UUnrealMCPCheckpointComponent>(*Actor, TEXT("MCP_CheckpointRuntime"), bCreated);
+                if (!Component)
+                {
+                    continue;
+                }
+
+                Component->Modify();
+                Component->ManagerActorLabel = FName(*ManagerName);
+                Component->CheckpointId = FName(*ReadActorTagValueOrDefault(*Actor, TEXT("mcp.checkpoint:"), Actor->GetActorLabel()));
+                Component->Order = ReadActorTagIntOrDefault(*Actor, TEXT("mcp.order:"), 0);
+                Actor->Tags.AddUnique(TEXT("mcp.runtime:checkpoint"));
+                AddGameplayRuntimeBinding(Bindings, *Actor, *Component);
+                ++Counts.CheckpointCount;
+            }
+            else if (CommandType == TEXT("gameplay_bind_interactions"))
+            {
+                bool bCreated = false;
+                UUnrealMCPInteractionComponent* Component =
+                    FindOrCreateActorComponent<UUnrealMCPInteractionComponent>(*Actor, TEXT("MCP_InteractionRuntime"), bCreated);
+                if (!Component)
+                {
+                    continue;
+                }
+
+                Component->Modify();
+                Component->ManagerActorLabel = FName(*ManagerName);
+                Component->InteractionId = FName(*ReadActorTagValueOrDefault(*Actor, TEXT("mcp.interaction_id:"), Actor->GetActorLabel()));
+                Component->Kind = FName(*ReadActorTagValueOrDefault(*Actor, TEXT("mcp.interaction:"), TEXT("interaction")));
+                Component->Action = FName(*ReadActorTagValueOrDefault(*Actor, TEXT("mcp.action:"), FString()));
+                Component->TargetActorLabel = FName(*ReadActorTagValueOrDefault(*Actor, TEXT("mcp.target:"), FString()));
+                Actor->Tags.AddUnique(TEXT("mcp.runtime:interaction"));
+                AddGameplayRuntimeBinding(Bindings, *Actor, *Component);
+                ++Counts.InteractionCount;
+            }
+            else if (CommandType == TEXT("gameplay_bind_objective_flow"))
+            {
+                bool bCreated = false;
+                UUnrealMCPObjectiveComponent* Component =
+                    FindOrCreateActorComponent<UUnrealMCPObjectiveComponent>(*Actor, TEXT("MCP_ObjectiveRuntime"), bCreated);
+                if (!Component)
+                {
+                    continue;
+                }
+
+                Component->Modify();
+                Component->ManagerActorLabel = FName(*ManagerName);
+                Component->ObjectiveId = FName(*ReadActorTagValueOrDefault(*Actor, TEXT("mcp.objective:"), Actor->GetActorLabel()));
+                Component->Label = FName(*ReadActorTagValueOrDefault(*Actor, TEXT("mcp.objective_label:"), Actor->GetActorLabel()));
+                Component->Kind = FName(*ReadActorTagValueOrDefault(*Actor, TEXT("mcp.objective_kind:"), TEXT("location")));
+                Component->Order = ReadActorTagIntOrDefault(*Actor, TEXT("mcp.order:"), 0);
+                Actor->Tags.AddUnique(TEXT("mcp.runtime:objective"));
+                AddGameplayRuntimeBinding(Bindings, *Actor, *Component);
+                ++Counts.ObjectiveCount;
+            }
+        }
+
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("gameplay_runtime_operation"), MakeGameplayRuntimeOperationResult(nullptr, Bindings, Counts));
     }
 
     return nullptr;

@@ -866,6 +866,92 @@ Gameplay tools return the compact `gameplay_operation` data shape:
 }
 ```
 
+## `gameplay.create_system`
+
+Creates or updates the runtime gameplay manager actor. The manager stores score,
+checkpoint, interaction, and objective state during Play-in-Editor.
+
+```json
+{
+  "name": "MCP_GameplayManager",
+  "scene": "prototype",
+  "group": "gameplay",
+  "location": [0.0, 0.0, 120.0],
+  "tags": ["mcp.system:gameplay"]
+}
+```
+
+## `gameplay.bind_collectibles`
+
+Adds runtime collectible components to selected actors. If no names/tags are
+provided, the server selects `mcp.gameplay_actor:collectible` actors.
+
+```json
+{
+  "tags": ["mcp.gameplay_actor:collectible"],
+  "manager_name": "MCP_GameplayManager",
+  "value": 10,
+  "destroy_on_collect": true
+}
+```
+
+## `gameplay.bind_checkpoints`
+
+Adds runtime checkpoint trigger components to selected checkpoint marker actors.
+The bridge reads `mcp.checkpoint:*` and `mcp.order:*` metadata from actor tags.
+
+```json
+{
+  "tags": ["mcp.gameplay_actor:checkpoint"],
+  "manager_name": "MCP_GameplayManager"
+}
+```
+
+## `gameplay.bind_interactions`
+
+Adds runtime interaction trigger components. `mcp.action:open` hides and disables
+collision on the actor named by `mcp.target:*` when triggered.
+
+```json
+{
+  "tags": ["mcp.gameplay_actor:interaction"],
+  "manager_name": "MCP_GameplayManager"
+}
+```
+
+## `gameplay.bind_objective_flow`
+
+Adds runtime objective trigger components to selected objective marker actors.
+The manager advances objectives in `mcp.order:*` sequence.
+
+```json
+{
+  "tags": ["mcp.gameplay_actor:objective"],
+  "manager_name": "MCP_GameplayManager"
+}
+```
+
+Gameplay runtime tools return `gameplay_runtime_operation`:
+
+```json
+{
+  "manager": null,
+  "count": 1,
+  "collectible_count": 1,
+  "checkpoint_count": 0,
+  "interaction_count": 0,
+  "objective_count": 0,
+  "bindings": [
+    {
+      "name": "MCP_Coin_000_000",
+      "path": "PersistentLevel.MCP_Coin_000_000",
+      "component": "MCP_CollectibleRuntime"
+    }
+  ],
+  "elapsed_ms": 1
+}
+```
+
 ## MCP Methods
 
 The stdio server currently handles:
