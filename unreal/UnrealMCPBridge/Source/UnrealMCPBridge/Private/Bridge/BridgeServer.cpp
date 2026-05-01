@@ -1376,8 +1376,15 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
 
     if (CommandType == TEXT("material_create_procedural_texture"))
     {
+        TSharedPtr<FJsonObject> TextureData = Data;
+        const TSharedPtr<FJsonObject>* NestedSpec = nullptr;
+        if (Data->TryGetObjectField(TEXT("spec"), NestedSpec) && NestedSpec != nullptr && NestedSpec->IsValid())
+        {
+            TextureData = *NestedSpec;
+        }
+
         FString Path;
-        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        if (!TextureData->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
         {
             OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("material.create_procedural_texture requires data.path"));
             return nullptr;
@@ -1393,20 +1400,21 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         }
 
         FString Pattern = TEXT("solid");
-        Data->TryGetStringField(TEXT("pattern"), Pattern);
+        TextureData->TryGetStringField(TEXT("pattern"), Pattern);
         int32 Width = 64;
         int32 Height = 64;
         int32 CheckerSize = 8;
-        Data->TryGetNumberField(TEXT("width"), Width);
-        Data->TryGetNumberField(TEXT("height"), Height);
-        Data->TryGetNumberField(TEXT("checker_size"), CheckerSize);
+        TextureData->TryGetNumberField(TEXT("width"), Width);
+        TextureData->TryGetNumberField(TEXT("height"), Height);
+        TextureData->TryGetNumberField(TEXT("checker_size"), CheckerSize);
         Width = FMath::Clamp(Width, 1, 4096);
         Height = FMath::Clamp(Height, 1, 4096);
         CheckerSize = FMath::Max(CheckerSize, 1);
 
         FLinearColor ColorA = FLinearColor::White;
         FLinearColor ColorB = FLinearColor::Black;
-        if (!ReadColorField(Data, TEXT("color_a"), ColorA, ColorA) || !ReadColorField(Data, TEXT("color_b"), ColorB, ColorB))
+        if (!ReadColorField(TextureData, TEXT("color_a"), ColorA, ColorA) ||
+            !ReadColorField(TextureData, TEXT("color_b"), ColorB, ColorB))
         {
             OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("texture colors must be arrays of 4 numbers"));
             return nullptr;
