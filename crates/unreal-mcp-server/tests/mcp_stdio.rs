@@ -68,6 +68,12 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
             "material.set_parameters",
             "material.bulk_apply",
             "world.bulk_set_materials",
+            "lighting.set_night_scene",
+            "lighting.set_sky",
+            "lighting.set_fog",
+            "lighting.set_post_process",
+            "lighting.bulk_set_lights",
+            "lighting.set_time_of_day",
         ]
     );
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
@@ -126,6 +132,21 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     assert_eq!(
         tool_by_name("world.bulk_set_materials")["inputSchema"]["required"],
         json!(["material"])
+    );
+    assert_eq!(
+        tool_by_name("lighting.set_night_scene")["inputSchema"]["required"],
+        json!([])
+    );
+    assert_eq!(
+        tool_by_name("lighting.bulk_set_lights")["inputSchema"]["required"],
+        json!(["lights"])
+    );
+    let light_schema =
+        &tool_by_name("lighting.bulk_set_lights")["inputSchema"]["properties"]["lights"]["items"];
+    assert_eq!(light_schema["required"], json!(["name"]));
+    assert_eq!(
+        light_schema["properties"]["kind"]["enum"],
+        json!(["point", "rect", "spot"])
     );
 }
 
@@ -304,6 +325,75 @@ async fn stdio_tools_call_dispatches_material_bulk_apply() {
         .as_str()
         .expect("summary text")
         .contains("Applied material to 1 actor"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_lighting_set_night_scene() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+            "name": "lighting.set_night_scene",
+            "arguments": {
+                "moon_intensity": 0.12,
+                "sky_intensity": 0.05,
+                "fog_density": 0.01
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Updated 5 lighting actor"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("MCP_MoonLight"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_lighting_bulk_set_lights() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {
+            "name": "lighting.bulk_set_lights",
+            "arguments": {
+                "lights": [
+                    {
+                        "name": "MCP_StreetLight_001",
+                        "kind": "point",
+                        "location": [100.0, 200.0, 360.0],
+                        "color": [1.0, 0.82, 0.55, 1.0],
+                        "intensity": 5000.0,
+                        "tags": ["mcp.scene:lighting_smoke"]
+                    }
+                ]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Configured 1 light"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("MCP_StreetLight_001"));
 }
 
 #[tokio::test]

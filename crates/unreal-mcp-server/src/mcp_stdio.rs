@@ -190,6 +190,36 @@ fn tools_list_response(id: Value) -> Value {
                     "world.bulk_set_materials",
                     "Set one material on actors selected by names or tags.",
                     world_bulk_set_materials_schema()
+                ),
+                tool_definition(
+                    "lighting.set_night_scene",
+                    "Configure moonlight, sky, fog, and exposure for a night scene.",
+                    lighting_night_scene_schema()
+                ),
+                tool_definition(
+                    "lighting.set_sky",
+                    "Configure sky lighting for the current level.",
+                    lighting_sky_schema()
+                ),
+                tool_definition(
+                    "lighting.set_fog",
+                    "Configure exponential height fog for the current level.",
+                    lighting_fog_schema()
+                ),
+                tool_definition(
+                    "lighting.set_post_process",
+                    "Configure an unbound post-process volume.",
+                    lighting_post_process_schema()
+                ),
+                tool_definition(
+                    "lighting.bulk_set_lights",
+                    "Create or update many lights in one bridge request.",
+                    lighting_bulk_set_lights_schema()
+                ),
+                tool_definition(
+                    "lighting.set_time_of_day",
+                    "Configure one active sun directional light.",
+                    lighting_time_of_day_schema()
                 )
             ]
         }
@@ -461,6 +491,114 @@ fn world_bulk_set_materials_schema() -> Value {
     })
 }
 
+fn lighting_night_scene_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "moon_rotation": vec3_schema(),
+            "moon_intensity": { "type": "number" },
+            "moon_color": vec4_schema(),
+            "sky_intensity": { "type": "number" },
+            "fog_density": { "type": "number", "minimum": 0 },
+            "exposure_compensation": { "type": "number" }
+        },
+        "required": [],
+        "additionalProperties": false
+    })
+}
+
+fn lighting_sky_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "sky_intensity": { "type": "number" },
+            "lower_hemisphere_color": vec4_schema()
+        },
+        "required": [],
+        "additionalProperties": false
+    })
+}
+
+fn lighting_fog_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "density": { "type": "number", "minimum": 0 },
+            "height_falloff": { "type": "number", "minimum": 0 },
+            "color": vec4_schema(),
+            "start_distance": { "type": "number", "minimum": 0 }
+        },
+        "required": [],
+        "additionalProperties": false
+    })
+}
+
+fn lighting_post_process_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "exposure_compensation": { "type": "number" },
+            "min_brightness": { "type": "number", "minimum": 0 },
+            "max_brightness": { "type": "number", "minimum": 0 },
+            "bloom_intensity": { "type": "number", "minimum": 0 }
+        },
+        "required": [],
+        "additionalProperties": false
+    })
+}
+
+fn light_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "kind": {
+                "type": "string",
+                "enum": ["point", "rect", "spot"]
+            },
+            "location": vec3_schema(),
+            "rotation": vec3_schema(),
+            "scale": vec3_schema(),
+            "color": vec4_schema(),
+            "intensity": { "type": "number", "minimum": 0 },
+            "attenuation_radius": { "type": "number", "minimum": 0 },
+            "source_radius": { "type": "number", "minimum": 0 },
+            "source_width": { "type": "number", "minimum": 0 },
+            "source_height": { "type": "number", "minimum": 0 },
+            "tags": string_array_schema()
+        },
+        "required": ["name"],
+        "additionalProperties": false
+    })
+}
+
+fn lighting_bulk_set_lights_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "lights": {
+                "type": "array",
+                "items": light_schema()
+            }
+        },
+        "required": ["lights"],
+        "additionalProperties": false
+    })
+}
+
+fn lighting_time_of_day_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "sun_rotation": vec3_schema(),
+            "sun_intensity": { "type": "number", "minimum": 0 },
+            "sun_color": vec4_schema()
+        },
+        "required": [],
+        "additionalProperties": false
+    })
+}
+
 fn world_bulk_delete_schema() -> Value {
     json!({
         "type": "object",
@@ -575,6 +713,12 @@ async fn call_tool(
         "material.set_parameters" => tools.material_set_parameters(arguments).await,
         "material.bulk_apply" => tools.material_bulk_apply(arguments).await,
         "world.bulk_set_materials" => tools.world_bulk_set_materials(arguments).await,
+        "lighting.set_night_scene" => tools.lighting_set_night_scene(arguments).await,
+        "lighting.set_sky" => tools.lighting_set_sky(arguments).await,
+        "lighting.set_fog" => tools.lighting_set_fog(arguments).await,
+        "lighting.set_post_process" => tools.lighting_set_post_process(arguments).await,
+        "lighting.bulk_set_lights" => tools.lighting_bulk_set_lights(arguments).await,
+        "lighting.set_time_of_day" => tools.lighting_set_time_of_day(arguments).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }

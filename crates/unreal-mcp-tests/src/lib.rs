@@ -5,9 +5,9 @@ use tokio::task::JoinHandle;
 
 use unreal_mcp_protocol::{
     decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetOperation, BridgeStatus,
-    Command, CommandResult, LevelInfo, LevelList, LevelOperation, MaterialAppliedActor,
-    MaterialApplyResult, MaterialOperation, MaterialParameterOperation, ProceduralTextureOperation,
-    ResponseEnvelope, SpawnedActor, Transform, WorldQueryResult,
+    Command, CommandResult, LevelInfo, LevelList, LevelOperation, LightSummary, LightingOperation,
+    MaterialAppliedActor, MaterialApplyResult, MaterialOperation, MaterialParameterOperation,
+    ProceduralTextureOperation, ResponseEnvelope, SpawnedActor, Transform, WorldQueryResult,
 };
 
 pub struct FakeBridge {
@@ -92,6 +92,12 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "material.set_parameters".to_string(),
                     "material.bulk_apply".to_string(),
                     "world.bulk_set_materials".to_string(),
+                    "lighting.set_night_scene".to_string(),
+                    "lighting.set_sky".to_string(),
+                    "lighting.set_fog".to_string(),
+                    "lighting.set_post_process".to_string(),
+                    "lighting.bulk_set_lights".to_string(),
+                    "lighting.set_time_of_day".to_string(),
                 ],
             },
             Command::LevelCreate { path, open, save } => {
@@ -221,6 +227,52 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                         material,
                         slot,
                     }],
+                    count: 1,
+                })
+            }
+            Command::LightingSetNightScene { .. } => {
+                CommandResult::LightingOperation(LightingOperation {
+                    changed: vec![
+                        "MCP_MoonLight".to_string(),
+                        "MCP_SkyLight".to_string(),
+                        "MCP_SkyAtmosphere".to_string(),
+                        "MCP_NightFog".to_string(),
+                        "MCP_PostProcess".to_string(),
+                    ],
+                    count: 5,
+                })
+            }
+            Command::LightingSetSky { .. } => CommandResult::LightingOperation(LightingOperation {
+                changed: vec!["MCP_SkyLight".to_string(), "MCP_SkyAtmosphere".to_string()],
+                count: 2,
+            }),
+            Command::LightingSetFog { .. } => CommandResult::LightingOperation(LightingOperation {
+                changed: vec!["MCP_NightFog".to_string()],
+                count: 1,
+            }),
+            Command::LightingSetPostProcess { .. } => {
+                CommandResult::LightingOperation(LightingOperation {
+                    changed: vec!["MCP_PostProcess".to_string()],
+                    count: 1,
+                })
+            }
+            Command::LightingBulkSetLights { lights } => {
+                let lights = lights
+                    .into_iter()
+                    .map(|light| LightSummary {
+                        path: format!("PersistentLevel.{}", light.name),
+                        name: light.name,
+                        kind: light.kind,
+                    })
+                    .collect::<Vec<_>>();
+                CommandResult::LightingBulkSetLights {
+                    count: lights.len(),
+                    lights,
+                }
+            }
+            Command::LightingSetTimeOfDay { .. } => {
+                CommandResult::LightingOperation(LightingOperation {
+                    changed: vec!["MCP_SunLight".to_string()],
                     count: 1,
                 })
             }

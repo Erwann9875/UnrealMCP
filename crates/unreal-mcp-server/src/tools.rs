@@ -4,9 +4,9 @@ use anyhow::{bail, ensure};
 use serde::Deserialize;
 use unreal_mcp_protocol::{
     ActorSpawnSpec, AssetOperation, BridgeStatus, Command, CommandResult, ErrorMode,
-    LevelOperation, MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
-    MaterialParameterOperation, ProceduralTextureOperation, RequestEnvelope, ResponseEnvelope,
-    ResponseMode, TextureCreateSpec, Transform,
+    LevelOperation, LightSpec, LightingOperation, MaterialApplyResult, MaterialAssignment,
+    MaterialOperation, MaterialParameter, MaterialParameterOperation, ProceduralTextureOperation,
+    RequestEnvelope, ResponseEnvelope, ResponseMode, TextureCreateSpec, Transform,
 };
 
 use crate::BridgeClient;
@@ -526,6 +526,161 @@ impl ConnectionTools {
         ))
     }
 
+    pub async fn lighting_set_night_scene(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LightingNightSceneArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "lighting.set_night_scene",
+                Command::LightingSetNightScene {
+                    moon_rotation: args.moon_rotation,
+                    moon_intensity: args.moon_intensity,
+                    moon_color: args.moon_color,
+                    sky_intensity: args.sky_intensity,
+                    fog_density: args.fog_density,
+                    exposure_compensation: args.exposure_compensation,
+                },
+            )
+            .await?;
+        let operation = expect_lighting_operation("lighting.set_night_scene", &response)?;
+        Ok(lighting_operation_response(
+            "lighting.set_night_scene",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn lighting_set_sky(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LightingSkyArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "lighting.set_sky",
+                Command::LightingSetSky {
+                    sky_intensity: args.sky_intensity,
+                    lower_hemisphere_color: args.lower_hemisphere_color,
+                },
+            )
+            .await?;
+        let operation = expect_lighting_operation("lighting.set_sky", &response)?;
+        Ok(lighting_operation_response(
+            "lighting.set_sky",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn lighting_set_fog(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LightingFogArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "lighting.set_fog",
+                Command::LightingSetFog {
+                    density: args.density,
+                    height_falloff: args.height_falloff,
+                    color: args.color,
+                    start_distance: args.start_distance,
+                },
+            )
+            .await?;
+        let operation = expect_lighting_operation("lighting.set_fog", &response)?;
+        Ok(lighting_operation_response(
+            "lighting.set_fog",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn lighting_set_post_process(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LightingPostProcessArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "lighting.set_post_process",
+                Command::LightingSetPostProcess {
+                    exposure_compensation: args.exposure_compensation,
+                    min_brightness: args.min_brightness,
+                    max_brightness: args.max_brightness,
+                    bloom_intensity: args.bloom_intensity,
+                },
+            )
+            .await?;
+        let operation = expect_lighting_operation("lighting.set_post_process", &response)?;
+        Ok(lighting_operation_response(
+            "lighting.set_post_process",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
+    pub async fn lighting_bulk_set_lights(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LightingBulkSetLightsArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "lighting.bulk_set_lights",
+                Command::LightingBulkSetLights {
+                    lights: args.lights.into_iter().map(LightArgs::into_spec).collect(),
+                },
+            )
+            .await?;
+        let (lights, count) = match response.results.as_slice() {
+            [CommandResult::LightingBulkSetLights { lights, count }] => (lights.clone(), *count),
+            [] => bail!("unexpected lighting.bulk_set_lights response: missing lights result"),
+            [result] => bail!(
+                "unexpected lighting.bulk_set_lights response: expected lights result, got {result:?}"
+            ),
+            results => bail!(
+                "unexpected lighting.bulk_set_lights response: expected exactly one lights result, got {} results",
+                results.len()
+            ),
+        };
+
+        Ok(ToolResponse {
+            tool_name: "lighting.bulk_set_lights",
+            summary: format!("Configured {count} light(s)."),
+            data: json!({
+                "count": count,
+                "lights": lights,
+                "elapsed_ms": response.elapsed_ms
+            }),
+        })
+    }
+
+    pub async fn lighting_set_time_of_day(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: LightingTimeOfDayArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "lighting.set_time_of_day",
+                Command::LightingSetTimeOfDay {
+                    sun_rotation: args.sun_rotation,
+                    sun_intensity: args.sun_intensity,
+                    sun_color: args.sun_color,
+                },
+            )
+            .await?;
+        let operation = expect_lighting_operation("lighting.set_time_of_day", &response)?;
+        Ok(lighting_operation_response(
+            "lighting.set_time_of_day",
+            response.elapsed_ms,
+            operation,
+        ))
+    }
+
     async fn send_single(
         &self,
         command_name: &str,
@@ -694,6 +849,23 @@ fn expect_material_apply(
     }
 }
 
+fn expect_lighting_operation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<LightingOperation> {
+    match response.results.as_slice() {
+        [CommandResult::LightingOperation(operation)] => Ok(operation.clone()),
+        [] => bail!("unexpected {command_name} response: missing lighting operation result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected lighting operation, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one lighting operation result, got {} results",
+            results.len()
+        ),
+    }
+}
+
 fn material_operation_response(
     tool_name: &'static str,
     summary: String,
@@ -741,6 +913,22 @@ fn material_apply_response(
         data: json!({
             "count": result.count,
             "applied": result.applied,
+            "elapsed_ms": elapsed_ms
+        }),
+    }
+}
+
+fn lighting_operation_response(
+    tool_name: &'static str,
+    elapsed_ms: u32,
+    operation: LightingOperation,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary: format!("Updated {} lighting actor(s).", operation.count),
+        data: json!({
+            "count": operation.count,
+            "changed": operation.changed,
             "elapsed_ms": elapsed_ms
         }),
     }
@@ -925,6 +1113,117 @@ struct WorldBulkSetMaterialsArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct LightingNightSceneArgs {
+    #[serde(default = "default_moon_rotation")]
+    moon_rotation: [f64; 3],
+    #[serde(default = "default_moon_intensity")]
+    moon_intensity: f64,
+    #[serde(default = "default_moon_color")]
+    moon_color: [f64; 4],
+    #[serde(default = "default_sky_intensity")]
+    sky_intensity: f64,
+    #[serde(default = "default_fog_density")]
+    fog_density: f64,
+    #[serde(default = "default_exposure_compensation")]
+    exposure_compensation: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct LightingSkyArgs {
+    #[serde(default = "default_sky_intensity")]
+    sky_intensity: f64,
+    #[serde(default = "default_lower_hemisphere_color")]
+    lower_hemisphere_color: [f64; 4],
+}
+
+#[derive(Debug, Deserialize)]
+struct LightingFogArgs {
+    #[serde(default = "default_fog_density")]
+    density: f64,
+    #[serde(default = "default_fog_height_falloff")]
+    height_falloff: f64,
+    #[serde(default = "default_fog_color")]
+    color: [f64; 4],
+    #[serde(default)]
+    start_distance: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct LightingPostProcessArgs {
+    #[serde(default = "default_exposure_compensation")]
+    exposure_compensation: f64,
+    #[serde(default = "default_min_brightness")]
+    min_brightness: f64,
+    #[serde(default = "default_max_brightness")]
+    max_brightness: f64,
+    #[serde(default = "default_bloom_intensity")]
+    bloom_intensity: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct LightingBulkSetLightsArgs {
+    lights: Vec<LightArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LightArgs {
+    name: String,
+    #[serde(default = "default_light_kind")]
+    kind: String,
+    #[serde(default)]
+    location: [f64; 3],
+    #[serde(default)]
+    rotation: [f64; 3],
+    #[serde(default = "default_scale")]
+    scale: [f64; 3],
+    #[serde(default = "default_light_color")]
+    color: [f64; 4],
+    #[serde(default = "default_light_intensity")]
+    intensity: f64,
+    #[serde(default = "default_attenuation_radius")]
+    attenuation_radius: f64,
+    #[serde(default = "default_source_radius")]
+    source_radius: f64,
+    #[serde(default = "default_source_width")]
+    source_width: f64,
+    #[serde(default = "default_source_height")]
+    source_height: f64,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+impl LightArgs {
+    fn into_spec(self) -> LightSpec {
+        LightSpec {
+            name: self.name,
+            kind: self.kind,
+            transform: Transform {
+                location: self.location,
+                rotation: self.rotation,
+                scale: self.scale,
+            },
+            color: self.color,
+            intensity: self.intensity,
+            attenuation_radius: self.attenuation_radius,
+            source_radius: self.source_radius,
+            source_width: self.source_width,
+            source_height: self.source_height,
+            tags: self.tags,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LightingTimeOfDayArgs {
+    #[serde(default = "default_sun_rotation")]
+    sun_rotation: [f64; 3],
+    #[serde(default = "default_sun_intensity")]
+    sun_intensity: f64,
+    #[serde(default = "default_sun_color")]
+    sun_color: [f64; 4],
+}
+
+#[derive(Debug, Deserialize)]
 struct ScalarParameterArg {
     name: String,
     value: f64,
@@ -1002,4 +1301,92 @@ fn default_texture_color_b() -> [f64; 4] {
 
 fn default_checker_size() -> u32 {
     8
+}
+
+fn default_moon_rotation() -> [f64; 3] {
+    [-35.0, -25.0, 0.0]
+}
+
+fn default_moon_intensity() -> f64 {
+    0.12
+}
+
+fn default_moon_color() -> [f64; 4] {
+    [0.55, 0.65, 1.0, 1.0]
+}
+
+fn default_sky_intensity() -> f64 {
+    0.05
+}
+
+fn default_fog_density() -> f64 {
+    0.01
+}
+
+fn default_exposure_compensation() -> f64 {
+    -0.5
+}
+
+fn default_lower_hemisphere_color() -> [f64; 4] {
+    [0.01, 0.012, 0.018, 1.0]
+}
+
+fn default_fog_height_falloff() -> f64 {
+    0.2
+}
+
+fn default_fog_color() -> [f64; 4] {
+    [0.08, 0.1, 0.16, 1.0]
+}
+
+fn default_min_brightness() -> f64 {
+    0.2
+}
+
+fn default_max_brightness() -> f64 {
+    1.0
+}
+
+fn default_bloom_intensity() -> f64 {
+    0.6
+}
+
+fn default_light_kind() -> String {
+    "point".to_string()
+}
+
+fn default_light_color() -> [f64; 4] {
+    [1.0, 0.82, 0.55, 1.0]
+}
+
+fn default_light_intensity() -> f64 {
+    5000.0
+}
+
+fn default_attenuation_radius() -> f64 {
+    1000.0
+}
+
+fn default_source_radius() -> f64 {
+    24.0
+}
+
+fn default_source_width() -> f64 {
+    64.0
+}
+
+fn default_source_height() -> f64 {
+    32.0
+}
+
+fn default_sun_rotation() -> [f64; 3] {
+    [-10.0, 110.0, 0.0]
+}
+
+fn default_sun_intensity() -> f64 {
+    1.0
+}
+
+fn default_sun_color() -> [f64; 4] {
+    [1.0, 0.93, 0.82, 1.0]
 }
