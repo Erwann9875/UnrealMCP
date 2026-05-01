@@ -61,7 +61,10 @@ async fn connection_tools_return_compact_status_response() {
     assert!(response.summary.contains("connected"));
     assert_eq!(response.data["connected"].as_bool(), Some(true));
     assert_eq!(response.data["bridge_version"].as_str(), Some("fake-0.1.0"));
-    assert_eq!(response.data["unreal_version"].as_str(), Some("fake-unreal"));
+    assert_eq!(
+        response.data["unreal_version"].as_str(),
+        Some("fake-unreal")
+    );
     assert!(response.data["elapsed_ms"].is_number());
 }
 
