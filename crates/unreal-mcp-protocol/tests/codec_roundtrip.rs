@@ -34,3 +34,36 @@ fn response_envelope_can_return_compact_success() {
     assert_eq!(response.errors.len(), 0);
     assert_eq!(response.results.len(), 1);
 }
+
+use unreal_mcp_protocol::{decode_json_request, encode_json_request};
+use unreal_mcp_protocol::{decode_msgpack_request, encode_msgpack_request};
+
+#[test]
+fn msgpack_request_roundtrip_preserves_envelope() {
+    let request = RequestEnvelope::new(
+        42,
+        ResponseMode::Summary,
+        ErrorMode::Stop,
+        vec![Command::Ping],
+    );
+
+    let bytes = encode_msgpack_request(&request).expect("encode request");
+    let decoded = decode_msgpack_request(&bytes).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn json_debug_request_roundtrip_preserves_envelope() {
+    let request = RequestEnvelope::new(
+        43,
+        ResponseMode::Full,
+        ErrorMode::Continue,
+        vec![Command::Status],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
