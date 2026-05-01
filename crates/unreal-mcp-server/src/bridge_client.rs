@@ -36,35 +36,6 @@ pub struct BridgeClient {
     format: BridgeFormat,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::BridgeFormat;
-
-    #[test]
-    fn bridge_format_parses_supported_values() {
-        assert_eq!(BridgeFormat::parse("msgpack").expect("msgpack"), BridgeFormat::Msgpack);
-        assert_eq!(BridgeFormat::parse("json").expect("json"), BridgeFormat::Json);
-    }
-
-    #[test]
-    fn bridge_format_parse_is_case_insensitive_and_trims_input() {
-        assert_eq!(BridgeFormat::parse(" JSON ").expect("json"), BridgeFormat::Json);
-        assert_eq!(
-            BridgeFormat::parse(" MsgPack ").expect("msgpack"),
-            BridgeFormat::Msgpack
-        );
-    }
-
-    #[test]
-    fn bridge_format_rejects_unknown_values() {
-        let error = BridgeFormat::parse("xml").expect_err("xml should be rejected");
-        assert!(
-            error.to_string().contains("unsupported bridge format"),
-            "expected unsupported bridge format error, got: {error:#}"
-        );
-    }
-}
-
 impl BridgeClient {
     pub fn new(address: String) -> Self {
         Self::with_timeout(address, DEFAULT_REQUEST_TIMEOUT)
@@ -147,9 +118,48 @@ impl BridgeClient {
         match self.format {
             BridgeFormat::Msgpack => Ok(decode_msgpack_response(bytes)?),
             BridgeFormat::Json => {
-                let text = std::str::from_utf8(bytes).context("bridge JSON response was not UTF-8")?;
+                let text =
+                    std::str::from_utf8(bytes).context("bridge JSON response was not UTF-8")?;
                 Ok(decode_json_response(text)?)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BridgeFormat;
+
+    #[test]
+    fn bridge_format_parses_supported_values() {
+        assert_eq!(
+            BridgeFormat::parse("msgpack").expect("msgpack"),
+            BridgeFormat::Msgpack
+        );
+        assert_eq!(
+            BridgeFormat::parse("json").expect("json"),
+            BridgeFormat::Json
+        );
+    }
+
+    #[test]
+    fn bridge_format_parse_is_case_insensitive_and_trims_input() {
+        assert_eq!(
+            BridgeFormat::parse(" JSON ").expect("json"),
+            BridgeFormat::Json
+        );
+        assert_eq!(
+            BridgeFormat::parse(" MsgPack ").expect("msgpack"),
+            BridgeFormat::Msgpack
+        );
+    }
+
+    #[test]
+    fn bridge_format_rejects_unknown_values() {
+        let error = BridgeFormat::parse("xml").expect_err("xml should be rejected");
+        assert!(
+            error.to_string().contains("unsupported bridge format"),
+            "expected unsupported bridge format error, got: {error:#}"
+        );
     }
 }

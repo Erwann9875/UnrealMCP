@@ -38,7 +38,9 @@ async fn bridge_client_sends_ping_and_receives_pong() {
 
 #[tokio::test]
 async fn bridge_client_sends_json_ping_and_receives_pong() {
-    let (address, bridge_task) = start_single_json_response_bridge().await.expect("json bridge");
+    let (address, bridge_task) = start_single_json_response_bridge()
+        .await
+        .expect("json bridge");
     let client = BridgeClient::with_format(address, BridgeFormat::Json);
 
     let response = client
