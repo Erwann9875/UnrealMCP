@@ -17,6 +17,7 @@
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Containers/StringConv.h"
+#include "Camera/CameraActor.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Editor.h"
@@ -38,6 +39,7 @@
 #include "EngineUtils.h"
 #include "Factories/MaterialFactoryNew.h"
 #include "FileHelpers.h"
+#include "GameFramework/PlayerStart.h"
 #include "IImageWrapperModule.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -747,6 +749,438 @@ void IncrementSceneCount(FSceneAssemblyCounts& Counts, const FString& SceneActor
     {
         ++Counts.PropCount;
     }
+}
+
+struct FGameplayCounts
+{
+    int32 PlayerCount = 0;
+    int32 CheckpointCount = 0;
+    int32 InteractionCount = 0;
+    int32 CollectibleCount = 0;
+    int32 ObjectiveCount = 0;
+};
+
+TSharedRef<FJsonObject> MakeGameplayOperationResult(
+    const TArray<TSharedPtr<FJsonValue>>& Spawned,
+    const FGameplayCounts& Counts)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("spawned"), Spawned);
+    ResultData->SetNumberField(TEXT("count"), Spawned.Num());
+    ResultData->SetNumberField(TEXT("player_count"), Counts.PlayerCount);
+    ResultData->SetNumberField(TEXT("checkpoint_count"), Counts.CheckpointCount);
+    ResultData->SetNumberField(TEXT("interaction_count"), Counts.InteractionCount);
+    ResultData->SetNumberField(TEXT("collectible_count"), Counts.CollectibleCount);
+    ResultData->SetNumberField(TEXT("objective_count"), Counts.ObjectiveCount);
+    return ResultData;
+}
+
+void AddGameplayTags(
+    AActor& Actor,
+    const FString& Scene,
+    const FString& Group,
+    const FString& GameplayKind,
+    const TArray<FString>& ExtraTags = TArray<FString>())
+{
+    Actor.Tags.AddUnique(TEXT("mcp.generated"));
+    Actor.Tags.AddUnique(TEXT("mcp.gameplay"));
+    if (!Scene.IsEmpty())
+    {
+        Actor.Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.scene:%s"), *Scene)));
+    }
+    if (!Group.IsEmpty())
+    {
+        Actor.Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.group:%s"), *Group)));
+    }
+    if (!GameplayKind.IsEmpty())
+    {
+        Actor.Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.gameplay_actor:%s"), *GameplayKind)));
+    }
+    for (const FString& Tag : ExtraTags)
+    {
+        if (!Tag.IsEmpty())
+        {
+            Actor.Tags.AddUnique(FName(*Tag));
+        }
+    }
+}
+
+bool SpawnGameplayStaticMeshActor(
+    UWorld& World,
+    const FString& Name,
+    UStaticMesh& Mesh,
+    const FVector& Location,
+    const FRotator& Rotation,
+    const FVector& Scale,
+    const FString& Scene,
+    const FString& Group,
+    const FString& GameplayKind,
+    const TArray<FString>& ExtraTags,
+    TArray<TSharedPtr<FJsonValue>>& Spawned)
+{
+    FActorSpawnParameters SpawnParameters;
+    SpawnParameters.Name = MakeUniqueObjectName(&World, AStaticMeshActor::StaticClass(), FName(*Name));
+    AStaticMeshActor* Actor = World.SpawnActor<AStaticMeshActor>(Location, Rotation, SpawnParameters);
+    if (!Actor)
+    {
+        return false;
+    }
+
+    Actor->Modify();
+    Actor->SetActorLabel(Name);
+    Actor->SetActorScale3D(Scale);
+    AddGameplayTags(*Actor, Scene, Group, GameplayKind, ExtraTags);
+
+    if (UStaticMeshComponent* MeshComponent = Actor->GetStaticMeshComponent())
+    {
+        MeshComponent->SetStaticMesh(&Mesh);
+        MeshComponent->SetMobility(EComponentMobility::Static);
+    }
+
+    AddSpawnedSceneActor(Spawned, *Actor);
+    return true;
+}
+
+bool SpawnGameplayPlayer(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FGameplayCounts& Counts,
+    FString& OutError)
+{
+    FString Name;
+    if (!SpecData->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+    {
+        OutError = TEXT("game player requires name");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+    FString SpawnTag;
+    SpecData->TryGetStringField(TEXT("spawn_tag"), SpawnTag);
+
+    FVector Location = FVector::ZeroVector;
+    FRotator Rotation = FRotator::ZeroRotator;
+    if (!ReadVectorField(SpecData, TEXT("location"), FVector::ZeroVector, Location) ||
+        !ReadRotatorField(SpecData, TEXT("rotation"), FRotator::ZeroRotator, Rotation))
+    {
+        OutError = TEXT("player location/rotation must have 3 numbers");
+        return false;
+    }
+
+    FActorSpawnParameters SpawnParameters;
+    SpawnParameters.Name = MakeUniqueObjectName(&World, APlayerStart::StaticClass(), FName(*Name));
+    APlayerStart* PlayerStart = World.SpawnActor<APlayerStart>(Location, Rotation, SpawnParameters);
+    if (!PlayerStart)
+    {
+        OutError = TEXT("failed to spawn player start");
+        return false;
+    }
+
+    PlayerStart->Modify();
+    PlayerStart->SetActorLabel(Name);
+    TArray<FString> ExtraTags;
+    if (!SpawnTag.IsEmpty())
+    {
+        ExtraTags.Add(FString::Printf(TEXT("mcp.spawn:%s"), *SpawnTag));
+    }
+    AddGameplayTags(*PlayerStart, Scene, Group, TEXT("player_start"), ExtraTags);
+    AddSpawnedSceneActor(Spawned, *PlayerStart);
+    ++Counts.PlayerCount;
+
+    bool bCreateCamera = false;
+    SpecData->TryGetBoolField(TEXT("create_camera"), bCreateCamera);
+    if (bCreateCamera)
+    {
+        FString CameraName = FString::Printf(TEXT("%s_Camera"), *Name);
+        SpecData->TryGetStringField(TEXT("camera_name"), CameraName);
+        FVector CameraLocation(-400.0, 0.0, 260.0);
+        FRotator CameraRotation(-10.0, 0.0, 0.0);
+        if (!ReadVectorField(SpecData, TEXT("camera_location"), CameraLocation, CameraLocation) ||
+            !ReadRotatorField(SpecData, TEXT("camera_rotation"), CameraRotation, CameraRotation))
+        {
+            OutError = TEXT("camera_location/camera_rotation must have 3 numbers");
+            return false;
+        }
+
+        FActorSpawnParameters CameraSpawnParameters;
+        CameraSpawnParameters.Name = MakeUniqueObjectName(&World, ACameraActor::StaticClass(), FName(*CameraName));
+        ACameraActor* Camera = World.SpawnActor<ACameraActor>(CameraLocation, CameraRotation, CameraSpawnParameters);
+        if (Camera)
+        {
+            Camera->Modify();
+            Camera->SetActorLabel(CameraName);
+            AddGameplayTags(*Camera, Scene, Group, TEXT("camera"), TArray<FString>());
+            AddSpawnedSceneActor(Spawned, *Camera);
+            ++Counts.PlayerCount;
+        }
+    }
+
+    return true;
+}
+
+bool SpawnGameplayCheckpoint(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    UStaticMesh& MarkerMesh,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FGameplayCounts& Counts,
+    FString& OutError)
+{
+    FString Name;
+    if (!SpecData->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+    {
+        OutError = TEXT("game checkpoint requires name");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+    FString CheckpointId = Name;
+    SpecData->TryGetStringField(TEXT("checkpoint_id"), CheckpointId);
+
+    int32 Order = 0;
+    SpecData->TryGetNumberField(TEXT("order"), Order);
+
+    FVector Location = FVector::ZeroVector;
+    FRotator Rotation = FRotator::ZeroRotator;
+    FVector Scale(2.0, 2.0, 0.25);
+    if (!ReadVectorField(SpecData, TEXT("location"), FVector::ZeroVector, Location) ||
+        !ReadRotatorField(SpecData, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
+        !ReadVectorField(SpecData, TEXT("scale"), Scale, Scale))
+    {
+        OutError = TEXT("checkpoint location/rotation/scale must have 3 numbers");
+        return false;
+    }
+
+    TArray<FString> ExtraTags;
+    ExtraTags.Add(FString::Printf(TEXT("mcp.checkpoint:%s"), *CheckpointId));
+    ExtraTags.Add(FString::Printf(TEXT("mcp.order:%d"), Order));
+    if (SpawnGameplayStaticMeshActor(World, Name, MarkerMesh, Location, Rotation, Scale, Scene, Group, TEXT("checkpoint"), ExtraTags, Spawned))
+    {
+        ++Counts.CheckpointCount;
+    }
+    return true;
+}
+
+bool SpawnGameplayInteraction(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    UStaticMesh& MarkerMesh,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FGameplayCounts& Counts,
+    FString& OutError)
+{
+    FString Name;
+    FString Kind;
+    if (!SpecData->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty() ||
+        !SpecData->TryGetStringField(TEXT("kind"), Kind) || Kind.IsEmpty())
+    {
+        OutError = TEXT("game interaction requires name and kind");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+    FString InteractionId = Name;
+    SpecData->TryGetStringField(TEXT("interaction_id"), InteractionId);
+
+    FVector Location = FVector::ZeroVector;
+    FRotator Rotation = FRotator::ZeroRotator;
+    FVector Scale(0.6, 0.6, 0.6);
+    if (!ReadVectorField(SpecData, TEXT("location"), FVector::ZeroVector, Location) ||
+        !ReadRotatorField(SpecData, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
+        !ReadVectorField(SpecData, TEXT("scale"), Scale, Scale))
+    {
+        OutError = TEXT("interaction location/rotation/scale must have 3 numbers");
+        return false;
+    }
+
+    TArray<FString> ExtraTags;
+    ExtraTags.Add(FString::Printf(TEXT("mcp.interaction:%s"), *Kind));
+    ExtraTags.Add(FString::Printf(TEXT("mcp.interaction_id:%s"), *InteractionId));
+    FString Target;
+    if (SpecData->TryGetStringField(TEXT("target"), Target) && !Target.IsEmpty())
+    {
+        ExtraTags.Add(FString::Printf(TEXT("mcp.target:%s"), *Target));
+    }
+    FString Action;
+    if (SpecData->TryGetStringField(TEXT("action"), Action) && !Action.IsEmpty())
+    {
+        ExtraTags.Add(FString::Printf(TEXT("mcp.action:%s"), *Action));
+    }
+    FString Prompt;
+    if (SpecData->TryGetStringField(TEXT("prompt"), Prompt) && !Prompt.IsEmpty())
+    {
+        ExtraTags.Add(FString::Printf(TEXT("mcp.prompt:%s"), *Prompt));
+    }
+
+    if (SpawnGameplayStaticMeshActor(World, Name, MarkerMesh, Location, Rotation, Scale, Scene, Group, TEXT("interaction"), ExtraTags, Spawned))
+    {
+        ++Counts.InteractionCount;
+    }
+    return true;
+}
+
+bool SpawnGameplayCollectibles(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    UStaticMesh& Mesh,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FGameplayCounts& Counts,
+    FString& OutError)
+{
+    FString NamePrefix;
+    if (!SpecData->TryGetStringField(TEXT("name_prefix"), NamePrefix) || NamePrefix.IsEmpty())
+    {
+        OutError = TEXT("game collectibles require name_prefix");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+
+    FVector Origin = FVector::ZeroVector;
+    FVector2D Spacing(180.0, 180.0);
+    FRotator Rotation = FRotator::ZeroRotator;
+    FVector Scale(0.25, 0.25, 0.25);
+    if (!ReadVectorField(SpecData, TEXT("origin"), FVector::ZeroVector, Origin) ||
+        !ReadVector2DField(SpecData, TEXT("spacing"), Spacing, Spacing) ||
+        !ReadRotatorField(SpecData, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
+        !ReadVectorField(SpecData, TEXT("scale"), Scale, Scale))
+    {
+        OutError = TEXT("collectibles origin/rotation/scale must have 3 numbers and spacing must have 2 numbers");
+        return false;
+    }
+
+    int32 Rows = 2;
+    int32 Columns = 2;
+    int32 Value = 1;
+    SpecData->TryGetNumberField(TEXT("rows"), Rows);
+    SpecData->TryGetNumberField(TEXT("columns"), Columns);
+    SpecData->TryGetNumberField(TEXT("value"), Value);
+    Rows = FMath::Clamp(Rows, 1, 200);
+    Columns = FMath::Clamp(Columns, 1, 200);
+    Spacing.X = FMath::Max(Spacing.X, 1.0);
+    Spacing.Y = FMath::Max(Spacing.Y, 1.0);
+
+    FString AnimationPath;
+    SpecData->TryGetStringField(TEXT("animation"), AnimationPath);
+
+    const double StartX = Origin.X - ((Columns - 1) * Spacing.X) * 0.5;
+    const double StartY = Origin.Y - ((Rows - 1) * Spacing.Y) * 0.5;
+    for (int32 Row = 0; Row < Rows; ++Row)
+    {
+        for (int32 Column = 0; Column < Columns; ++Column)
+        {
+            TArray<FString> ExtraTags;
+            ExtraTags.Add(FString::Printf(TEXT("mcp.value:%d"), Value));
+            ExtraTags.Add(FString::Printf(TEXT("mcp.order:%d"), Row * Columns + Column));
+            if (!AnimationPath.IsEmpty())
+            {
+                ExtraTags.Add(FString::Printf(TEXT("mcp.animation:%s"), *AnimationPath));
+            }
+
+            const FString Name = FString::Printf(TEXT("%s_%03d_%03d"), *NamePrefix, Row, Column);
+            if (SpawnGameplayStaticMeshActor(
+                    World,
+                    Name,
+                    Mesh,
+                    FVector(StartX + Column * Spacing.X, StartY + Row * Spacing.Y, Origin.Z),
+                    Rotation,
+                    Scale,
+                    Scene,
+                    Group,
+                    TEXT("collectible"),
+                    ExtraTags,
+                    Spawned))
+            {
+                ++Counts.CollectibleCount;
+            }
+        }
+    }
+
+    return true;
+}
+
+bool SpawnGameplayObjectiveFlow(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    UStaticMesh& MarkerMesh,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FGameplayCounts& Counts,
+    FString& OutError)
+{
+    FString NamePrefix;
+    if (!SpecData->TryGetStringField(TEXT("name_prefix"), NamePrefix) || NamePrefix.IsEmpty())
+    {
+        OutError = TEXT("game objective flow requires name_prefix");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+
+    const TArray<TSharedPtr<FJsonValue>>* Steps = nullptr;
+    if (!SpecData->TryGetArrayField(TEXT("steps"), Steps) || !Steps)
+    {
+        return true;
+    }
+
+    for (int32 Index = 0; Index < Steps->Num(); ++Index)
+    {
+        const TSharedPtr<FJsonObject> Step = (*Steps)[Index].IsValid() ? (*Steps)[Index]->AsObject() : nullptr;
+        if (!Step.IsValid())
+        {
+            continue;
+        }
+
+        FString StepId;
+        if (!Step->TryGetStringField(TEXT("id"), StepId) || StepId.IsEmpty())
+        {
+            StepId = FString::Printf(TEXT("%03d"), Index);
+        }
+        FString Label = StepId;
+        Step->TryGetStringField(TEXT("label"), Label);
+        FString Kind = TEXT("location");
+        Step->TryGetStringField(TEXT("kind"), Kind);
+
+        FVector Location = FVector::ZeroVector;
+        FRotator Rotation = FRotator::ZeroRotator;
+        FVector Scale(1.0, 1.0, 1.0);
+        if (!ReadVectorField(Step, TEXT("location"), FVector::ZeroVector, Location) ||
+            !ReadRotatorField(Step, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
+            !ReadVectorField(Step, TEXT("scale"), Scale, Scale))
+        {
+            OutError = TEXT("objective step location/rotation/scale must have 3 numbers");
+            return false;
+        }
+
+        TArray<FString> ExtraTags;
+        ExtraTags.Add(FString::Printf(TEXT("mcp.objective:%s"), *StepId));
+        ExtraTags.Add(FString::Printf(TEXT("mcp.objective_kind:%s"), *Kind));
+        ExtraTags.Add(FString::Printf(TEXT("mcp.objective_label:%s"), *Label));
+        ExtraTags.Add(FString::Printf(TEXT("mcp.order:%d"), Index));
+
+        const FString Name = FString::Printf(TEXT("%s_%03d_%s"), *NamePrefix, Index, *StepId);
+        if (SpawnGameplayStaticMeshActor(World, Name, MarkerMesh, Location, Rotation, Scale, Scene, Group, TEXT("objective"), ExtraTags, Spawned))
+        {
+            ++Counts.ObjectiveCount;
+        }
+    }
+
+    return true;
 }
 
 bool ParseCollisionTraceFlag(const FString& CollisionTrace, ECollisionTraceFlag& OutFlag)
@@ -3218,6 +3652,11 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         CommandNames.Add(MakeStringValue(TEXT("runtime.create_moving_light_animation")));
         CommandNames.Add(MakeStringValue(TEXT("runtime.create_material_parameter_animation")));
         CommandNames.Add(MakeStringValue(TEXT("runtime.attach_animation_to_actor")));
+        CommandNames.Add(MakeStringValue(TEXT("game.create_player")));
+        CommandNames.Add(MakeStringValue(TEXT("game.create_checkpoint")));
+        CommandNames.Add(MakeStringValue(TEXT("game.create_interaction")));
+        CommandNames.Add(MakeStringValue(TEXT("game.create_collectibles")));
+        CommandNames.Add(MakeStringValue(TEXT("game.create_objective_flow")));
 
         TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
         ResultData->SetArrayField(TEXT("commands"), CommandNames);
@@ -5050,6 +5489,81 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         }
 
         return MakeTaggedResult(TEXT("runtime_animation_operation"), MakeRuntimeAnimationOperation(FString(), Attached));
+    }
+
+    if (CommandType == TEXT("game_create_player") ||
+        CommandType == TEXT("game_create_checkpoint") ||
+        CommandType == TEXT("game_create_interaction") ||
+        CommandType == TEXT("game_create_collectibles") ||
+        CommandType == TEXT("game_create_objective_flow"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world"));
+            return nullptr;
+        }
+
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        TArray<TSharedPtr<FJsonValue>> Spawned;
+        FGameplayCounts Counts;
+        FString Error;
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "GameplayFoundation", "MCP Gameplay Foundation"));
+        if (CommandType == TEXT("game_create_player"))
+        {
+            if (!SpawnGameplayPlayer(*World, SpecData, Spawned, Counts, Error))
+            {
+                OutError = BuildError(CommandIndex, TEXT("invalid_payload"), Error);
+                return nullptr;
+            }
+        }
+        else if (CommandType == TEXT("game_create_collectibles"))
+        {
+            UStaticMesh* Mesh = LoadSceneStaticMesh(SpecData, TEXT("mesh"), TEXT("/Engine/BasicShapes/Cube.Cube"), Error);
+            if (!Mesh || !SpawnGameplayCollectibles(*World, SpecData, *Mesh, Spawned, Counts, Error))
+            {
+                OutError = BuildError(CommandIndex, TEXT("invalid_payload"), Error);
+                return nullptr;
+            }
+        }
+        else
+        {
+            UStaticMesh* MarkerMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+            if (!MarkerMesh)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to load default cube marker mesh"));
+                return nullptr;
+            }
+
+            if (CommandType == TEXT("game_create_checkpoint"))
+            {
+                if (!SpawnGameplayCheckpoint(*World, SpecData, *MarkerMesh, Spawned, Counts, Error))
+                {
+                    OutError = BuildError(CommandIndex, TEXT("invalid_payload"), Error);
+                    return nullptr;
+                }
+            }
+            else if (CommandType == TEXT("game_create_interaction"))
+            {
+                if (!SpawnGameplayInteraction(*World, SpecData, *MarkerMesh, Spawned, Counts, Error))
+                {
+                    OutError = BuildError(CommandIndex, TEXT("invalid_payload"), Error);
+                    return nullptr;
+                }
+            }
+            else if (CommandType == TEXT("game_create_objective_flow"))
+            {
+                if (!SpawnGameplayObjectiveFlow(*World, SpecData, *MarkerMesh, Spawned, Counts, Error))
+                {
+                    OutError = BuildError(CommandIndex, TEXT("invalid_payload"), Error);
+                    return nullptr;
+                }
+            }
+        }
+
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("gameplay_operation"), MakeGameplayOperationResult(Spawned, Counts));
     }
 
     return nullptr;
