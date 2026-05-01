@@ -64,6 +64,30 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
         ]
     );
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
+
+    let tool_by_name = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"))
+    };
+    assert_eq!(
+        tool_by_name("level.create")["inputSchema"]["required"],
+        json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("level.open")["inputSchema"]["required"],
+        json!(["path"])
+    );
+    assert_eq!(
+        tool_by_name("world.bulk_spawn")["inputSchema"]["required"],
+        json!(["actors"])
+    );
+    let actor_schema =
+        &tool_by_name("world.bulk_spawn")["inputSchema"]["properties"]["actors"]["items"];
+    assert_eq!(actor_schema["required"], json!(["name", "mesh"]));
+    assert_eq!(actor_schema["properties"]["location"]["maxItems"], 3);
+    assert!(tool_by_name("world.bulk_delete")["inputSchema"]["anyOf"].is_array());
 }
 
 #[tokio::test]

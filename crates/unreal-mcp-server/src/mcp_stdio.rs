@@ -103,62 +103,196 @@ fn tools_list_response(id: Value) -> Value {
             "tools": [
                 tool_definition(
                     "connection.ping",
-                    "Check whether the Unreal bridge responds."
+                    "Check whether the Unreal bridge responds.",
+                    empty_schema()
                 ),
                 tool_definition(
                     "connection.status",
-                    "Return compact Unreal bridge connection status."
+                    "Return compact Unreal bridge connection status.",
+                    empty_schema()
                 ),
                 tool_definition(
                     "connection.capabilities",
-                    "Return bridge-supported command names."
+                    "Return bridge-supported command names.",
+                    empty_schema()
                 ),
                 tool_definition(
                     "level.create",
-                    "Create a new Unreal level asset."
+                    "Create a new Unreal level asset.",
+                    level_create_schema()
                 ),
                 tool_definition(
                     "level.open",
-                    "Open an Unreal level asset."
+                    "Open an Unreal level asset.",
+                    level_path_schema()
                 ),
                 tool_definition(
                     "level.save",
-                    "Save the current or specified Unreal level."
+                    "Save the current or specified Unreal level.",
+                    level_save_schema()
                 ),
                 tool_definition(
                     "level.list",
-                    "List project level assets."
+                    "List project level assets.",
+                    empty_schema()
                 ),
                 tool_definition(
                     "world.bulk_spawn",
-                    "Spawn many static mesh actors in one bridge request."
+                    "Spawn many static mesh actors in one bridge request.",
+                    world_bulk_spawn_schema()
                 ),
                 tool_definition(
                     "world.bulk_delete",
-                    "Delete actors by name or tag in one bridge request."
+                    "Delete actors by name or tag in one bridge request.",
+                    world_bulk_delete_schema()
                 ),
                 tool_definition(
                     "world.query",
-                    "Query actors by name or tag."
+                    "Query actors by name or tag.",
+                    world_query_schema()
                 ),
                 tool_definition(
                     "world.snapshot",
-                    "Write a compact world snapshot to disk."
+                    "Write a compact world snapshot to disk.",
+                    world_snapshot_schema()
                 )
             ]
         }
     })
 }
 
-fn tool_definition(name: &str, description: &str) -> Value {
+fn tool_definition(name: &str, description: &str, input_schema: Value) -> Value {
     json!({
         "name": name,
         "description": description,
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        }
+        "inputSchema": input_schema
+    })
+}
+
+fn empty_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    })
+}
+
+fn level_create_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "open": { "type": "boolean" },
+            "save": { "type": "boolean" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn level_path_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+    })
+}
+
+fn level_save_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn string_array_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "string" }
+    })
+}
+
+fn vec3_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "number" },
+        "minItems": 3,
+        "maxItems": 3
+    })
+}
+
+fn world_bulk_spawn_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "actors": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "mesh": { "type": "string" },
+                        "location": vec3_schema(),
+                        "rotation": vec3_schema(),
+                        "scale": vec3_schema(),
+                        "scene": { "type": "string" },
+                        "group": { "type": "string" }
+                    },
+                    "required": ["name", "mesh"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["actors"],
+        "additionalProperties": false
+    })
+}
+
+fn world_bulk_delete_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "names": string_array_schema(),
+            "tags": string_array_schema()
+        },
+        "anyOf": [
+            { "required": ["names"] },
+            { "required": ["tags"] }
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn world_query_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "names": string_array_schema(),
+            "tags": string_array_schema(),
+            "include_generated": { "type": "boolean" },
+            "limit": {
+                "type": "integer",
+                "minimum": 1
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn world_snapshot_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "tags": string_array_schema()
+        },
+        "additionalProperties": false
     })
 }
 
