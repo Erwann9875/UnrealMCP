@@ -1,6 +1,8 @@
 # MCP Tools
 
-The first implemented tool group is `connection`.
+This foundation defines the initial `connection` protocol/tool surface.
+Only `connection.ping` has a Rust tool handler in this foundation. The
+stdio MCP dispatch path is still a skeleton.
 
 ## `connection.ping`
 
@@ -18,16 +20,21 @@ Default response shape:
 
 ## `connection.status`
 
-Returns compact connection and Unreal version details.
+Protocol command and Unreal bridge skeleton entry. Planned MCP dispatch
+wiring will return compact connection and Unreal version details.
 
 ## `connection.capabilities`
 
-Returns supported command names. The first version returns:
+Protocol command and Unreal bridge skeleton entry. Planned MCP dispatch
+wiring will return supported command names. The current bridge/protocol
+shape is:
 
 ```json
-[
-  "connection.ping",
-  "connection.status",
-  "connection.capabilities"
-]
+{
+  "commands": [
+    "connection.ping",
+    "connection.status",
+    "connection.capabilities"
+  ]
+}
 ```

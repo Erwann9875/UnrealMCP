@@ -22,5 +22,5 @@ cargo run -p unreal-mcp-server -- --help
 
 ## Protocol Docs
 
-- `docs/protocol/envelope.md`
-- `docs/protocol/tools.md`
+- [Envelope](docs/protocol/envelope.md)
+- [Tools](docs/protocol/tools.md)
