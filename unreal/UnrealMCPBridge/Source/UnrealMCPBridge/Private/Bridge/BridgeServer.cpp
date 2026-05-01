@@ -179,6 +179,33 @@ bool ReadVectorField(
     return true;
 }
 
+bool ReadVector2DField(
+    const TSharedPtr<FJsonObject>& Object,
+    const FString& FieldName,
+    const FVector2D& DefaultValue,
+    FVector2D& OutValue)
+{
+    OutValue = DefaultValue;
+    if (!Object.IsValid())
+    {
+        return false;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+    if (!Object->TryGetArrayField(FieldName, Values))
+    {
+        return true;
+    }
+
+    if (Values->Num() != 2)
+    {
+        return false;
+    }
+
+    OutValue = FVector2D((*Values)[0]->AsNumber(), (*Values)[1]->AsNumber());
+    return true;
+}
+
 bool ReadColorField(
     const TSharedPtr<FJsonObject>& Object,
     const FString& FieldName,
@@ -595,6 +622,131 @@ TSharedRef<FJsonObject> MakeStaticMeshOperationResult(const TArray<TSharedPtr<FJ
     ResultData->SetArrayField(TEXT("meshes"), Meshes);
     ResultData->SetNumberField(TEXT("count"), Meshes.Num());
     return ResultData;
+}
+
+struct FSceneAssemblyCounts
+{
+    int32 RoadCount = 0;
+    int32 SidewalkCount = 0;
+    int32 BuildingCount = 0;
+    int32 PropCount = 0;
+};
+
+void AddSpawnedSceneActor(TArray<TSharedPtr<FJsonValue>>& Spawned, const AActor& Actor)
+{
+    TSharedRef<FJsonObject> SpawnedActor = MakeShared<FJsonObject>();
+    SpawnedActor->SetStringField(TEXT("name"), Actor.GetActorLabel());
+    SpawnedActor->SetStringField(TEXT("path"), Actor.GetPathName());
+    Spawned.Add(MakeObjectValue(SpawnedActor));
+}
+
+TSharedRef<FJsonObject> MakeSceneAssemblyResult(
+    const TArray<TSharedPtr<FJsonValue>>& Spawned,
+    const FSceneAssemblyCounts& Counts)
+{
+    TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+    ResultData->SetArrayField(TEXT("spawned"), Spawned);
+    ResultData->SetNumberField(TEXT("count"), Spawned.Num());
+    ResultData->SetNumberField(TEXT("road_count"), Counts.RoadCount);
+    ResultData->SetNumberField(TEXT("sidewalk_count"), Counts.SidewalkCount);
+    ResultData->SetNumberField(TEXT("building_count"), Counts.BuildingCount);
+    ResultData->SetNumberField(TEXT("prop_count"), Counts.PropCount);
+    return ResultData;
+}
+
+FString ReadStringFieldOrDefault(
+    const TSharedPtr<FJsonObject>& Object,
+    const FString& FieldName,
+    const FString& DefaultValue)
+{
+    FString Value;
+    if (Object.IsValid() && Object->TryGetStringField(FieldName, Value) && !Value.IsEmpty())
+    {
+        return Value;
+    }
+    return DefaultValue;
+}
+
+UStaticMesh* LoadSceneStaticMesh(
+    const TSharedPtr<FJsonObject>& SpecData,
+    const FString& FieldName,
+    const FString& DefaultPath,
+    FString& OutError)
+{
+    const FString MeshPath = ReadStringFieldOrDefault(SpecData, FieldName, DefaultPath);
+    UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *ToObjectPath(MeshPath));
+    if (!Mesh)
+    {
+        OutError = FString::Printf(TEXT("failed to load static mesh '%s'"), *MeshPath);
+    }
+    return Mesh;
+}
+
+bool SpawnSceneStaticMeshActor(
+    UWorld& World,
+    const FString& Name,
+    UStaticMesh& Mesh,
+    const FVector& Location,
+    const FRotator& Rotation,
+    const FVector& Scale,
+    const FString& Scene,
+    const FString& Group,
+    const FString& SceneActorKind,
+    TArray<TSharedPtr<FJsonValue>>& Spawned)
+{
+    FActorSpawnParameters SpawnParameters;
+    SpawnParameters.Name = MakeUniqueObjectName(&World, AStaticMeshActor::StaticClass(), FName(*Name));
+    AStaticMeshActor* Actor = World.SpawnActor<AStaticMeshActor>(Location, Rotation, SpawnParameters);
+    if (!Actor)
+    {
+        return false;
+    }
+
+    Actor->Modify();
+    Actor->SetActorLabel(Name);
+    Actor->SetActorScale3D(Scale);
+    Actor->Tags.AddUnique(TEXT("mcp.generated"));
+    if (!Scene.IsEmpty())
+    {
+        Actor->Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.scene:%s"), *Scene)));
+    }
+    if (!Group.IsEmpty())
+    {
+        Actor->Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.group:%s"), *Group)));
+    }
+    if (!SceneActorKind.IsEmpty())
+    {
+        Actor->Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.scene_actor:%s"), *SceneActorKind)));
+    }
+
+    if (UStaticMeshComponent* MeshComponent = Actor->GetStaticMeshComponent())
+    {
+        MeshComponent->SetStaticMesh(&Mesh);
+        MeshComponent->SetMobility(EComponentMobility::Static);
+    }
+
+    AddSpawnedSceneActor(Spawned, *Actor);
+    return true;
+}
+
+void IncrementSceneCount(FSceneAssemblyCounts& Counts, const FString& SceneActorKind)
+{
+    if (SceneActorKind == TEXT("road"))
+    {
+        ++Counts.RoadCount;
+    }
+    else if (SceneActorKind == TEXT("sidewalk"))
+    {
+        ++Counts.SidewalkCount;
+    }
+    else if (SceneActorKind == TEXT("building"))
+    {
+        ++Counts.BuildingCount;
+    }
+    else
+    {
+        ++Counts.PropCount;
+    }
 }
 
 bool ParseCollisionTraceFlag(const FString& CollisionTrace, ECollisionTraceFlag& OutFlag)
@@ -1212,6 +1364,450 @@ bool ImportAssetFromSpec(
 
     ImportedAsset->MarkPackageDirty();
     AddAssetImportOperation(Assets, SourceFile, DestinationPath, ImportedAsset->GetClass()->GetName(), true, FString());
+    return true;
+}
+
+bool SpawnRoadNetwork(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    UStaticMesh& RoadMesh,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FSceneAssemblyCounts& Counts,
+    FString& OutError)
+{
+    FString NamePrefix;
+    if (!SpecData->TryGetStringField(TEXT("name_prefix"), NamePrefix) || NamePrefix.IsEmpty())
+    {
+        OutError = TEXT("scene road network requires name_prefix");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+
+    FVector Origin = FVector::ZeroVector;
+    FVector2D BlockSize(2400.0, 1800.0);
+    if (!ReadVectorField(SpecData, TEXT("origin"), FVector::ZeroVector, Origin) ||
+        !ReadVector2DField(SpecData, TEXT("block_size"), BlockSize, BlockSize))
+    {
+        OutError = TEXT("origin must have 3 numbers and block_size must have 2 numbers");
+        return false;
+    }
+
+    int32 Rows = 2;
+    int32 Columns = 2;
+    double RoadWidth = 320.0;
+    double RoadThickness = 20.0;
+    SpecData->TryGetNumberField(TEXT("rows"), Rows);
+    SpecData->TryGetNumberField(TEXT("columns"), Columns);
+    SpecData->TryGetNumberField(TEXT("road_width"), RoadWidth);
+    SpecData->TryGetNumberField(TEXT("road_thickness"), RoadThickness);
+    Rows = FMath::Clamp(Rows, 1, 100);
+    Columns = FMath::Clamp(Columns, 1, 100);
+    RoadWidth = FMath::Max(RoadWidth, 1.0);
+    RoadThickness = FMath::Max(RoadThickness, 1.0);
+    BlockSize.X = FMath::Max(BlockSize.X, 1.0);
+    BlockSize.Y = FMath::Max(BlockSize.Y, 1.0);
+
+    const double TotalX = Columns * BlockSize.X + (Columns + 1) * RoadWidth;
+    const double TotalY = Rows * BlockSize.Y + (Rows + 1) * RoadWidth;
+    const double Z = Origin.Z + RoadThickness * 0.5;
+
+    for (int32 Column = 0; Column <= Columns; ++Column)
+    {
+        const double X = Origin.X - TotalX * 0.5 + RoadWidth * 0.5 + Column * (BlockSize.X + RoadWidth);
+        const FString Name = FString::Printf(TEXT("%s_V_%03d"), *NamePrefix, Column);
+        if (SpawnSceneStaticMeshActor(
+                World,
+                Name,
+                RoadMesh,
+                FVector(X, Origin.Y, Z),
+                FRotator::ZeroRotator,
+                FVector(RoadWidth / 100.0, TotalY / 100.0, RoadThickness / 100.0),
+                Scene,
+                Group,
+                TEXT("road"),
+                Spawned))
+        {
+            ++Counts.RoadCount;
+        }
+    }
+
+    for (int32 Row = 0; Row <= Rows; ++Row)
+    {
+        const double Y = Origin.Y - TotalY * 0.5 + RoadWidth * 0.5 + Row * (BlockSize.Y + RoadWidth);
+        const FString Name = FString::Printf(TEXT("%s_H_%03d"), *NamePrefix, Row);
+        if (SpawnSceneStaticMeshActor(
+                World,
+                Name,
+                RoadMesh,
+                FVector(Origin.X, Y, Z),
+                FRotator::ZeroRotator,
+                FVector(TotalX / 100.0, RoadWidth / 100.0, RoadThickness / 100.0),
+                Scene,
+                Group,
+                TEXT("road"),
+                Spawned))
+        {
+            ++Counts.RoadCount;
+        }
+    }
+
+    return true;
+}
+
+bool SpawnGridPlacement(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    UStaticMesh& Mesh,
+    const FString& SceneActorKind,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FSceneAssemblyCounts& Counts,
+    FString& OutError)
+{
+    FString NamePrefix;
+    if (!SpecData->TryGetStringField(TEXT("name_prefix"), NamePrefix) || NamePrefix.IsEmpty())
+    {
+        OutError = TEXT("scene grid placement requires name_prefix");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+
+    FVector Origin = FVector::ZeroVector;
+    FVector2D Spacing(600.0, 600.0);
+    FRotator Rotation = FRotator::ZeroRotator;
+    FVector Scale(1.0, 1.0, 1.0);
+    if (!ReadVectorField(SpecData, TEXT("origin"), FVector::ZeroVector, Origin) ||
+        !ReadVector2DField(SpecData, TEXT("spacing"), Spacing, Spacing) ||
+        !ReadRotatorField(SpecData, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
+        !ReadVectorField(SpecData, TEXT("scale"), FVector(1.0, 1.0, 1.0), Scale))
+    {
+        OutError = TEXT("origin/rotation/scale must have 3 numbers and spacing must have 2 numbers");
+        return false;
+    }
+
+    int32 Rows = 2;
+    int32 Columns = 2;
+    double YawVariation = 0.0;
+    double ScaleVariation = 0.0;
+    int32 Seed = 0;
+    SpecData->TryGetNumberField(TEXT("rows"), Rows);
+    SpecData->TryGetNumberField(TEXT("columns"), Columns);
+    SpecData->TryGetNumberField(TEXT("yaw_variation"), YawVariation);
+    SpecData->TryGetNumberField(TEXT("scale_variation"), ScaleVariation);
+    SpecData->TryGetNumberField(TEXT("seed"), Seed);
+    Rows = FMath::Clamp(Rows, 1, 200);
+    Columns = FMath::Clamp(Columns, 1, 200);
+    Spacing.X = FMath::Max(Spacing.X, 1.0);
+    Spacing.Y = FMath::Max(Spacing.Y, 1.0);
+    YawVariation = FMath::Max(YawVariation, 0.0);
+    ScaleVariation = FMath::Clamp(ScaleVariation, 0.0, 0.95);
+
+    FRandomStream Random(Seed);
+    const double StartX = Origin.X - ((Columns - 1) * Spacing.X) * 0.5;
+    const double StartY = Origin.Y - ((Rows - 1) * Spacing.Y) * 0.5;
+    for (int32 Row = 0; Row < Rows; ++Row)
+    {
+        for (int32 Column = 0; Column < Columns; ++Column)
+        {
+            FRotator ActorRotation = Rotation;
+            if (YawVariation > 0.0)
+            {
+                ActorRotation.Yaw += Random.FRandRange(-YawVariation, YawVariation);
+            }
+
+            FVector ActorScale = Scale;
+            if (ScaleVariation > 0.0)
+            {
+                const float ScaleFactor = Random.FRandRange(1.0f - ScaleVariation, 1.0f + ScaleVariation);
+                ActorScale *= ScaleFactor;
+            }
+
+            const FString Name = FString::Printf(TEXT("%s_%03d_%03d"), *NamePrefix, Row, Column);
+            if (SpawnSceneStaticMeshActor(
+                    World,
+                    Name,
+                    Mesh,
+                    FVector(StartX + Column * Spacing.X, StartY + Row * Spacing.Y, Origin.Z),
+                    ActorRotation,
+                    ActorScale,
+                    Scene,
+                    Group,
+                    SceneActorKind,
+                    Spawned))
+            {
+                IncrementSceneCount(Counts, SceneActorKind);
+            }
+        }
+    }
+
+    return true;
+}
+
+bool SpawnCityBlock(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    UStaticMesh& RoadMesh,
+    UStaticMesh& SidewalkMesh,
+    UStaticMesh& BuildingMesh,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FSceneAssemblyCounts& Counts,
+    FString& OutError)
+{
+    FString NamePrefix;
+    if (!SpecData->TryGetStringField(TEXT("name_prefix"), NamePrefix) || NamePrefix.IsEmpty())
+    {
+        OutError = TEXT("scene city block requires name_prefix");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+
+    FVector Origin = FVector::ZeroVector;
+    FVector2D Size(2400.0, 1800.0);
+    FVector BuildingScale(3.0, 3.0, 8.0);
+    if (!ReadVectorField(SpecData, TEXT("origin"), FVector::ZeroVector, Origin) ||
+        !ReadVector2DField(SpecData, TEXT("size"), Size, Size) ||
+        !ReadVectorField(SpecData, TEXT("building_scale"), BuildingScale, BuildingScale))
+    {
+        OutError = TEXT("origin/building_scale must have 3 numbers and size must have 2 numbers");
+        return false;
+    }
+
+    double RoadWidth = 320.0;
+    double SidewalkWidth = 180.0;
+    int32 BuildingRows = 2;
+    int32 BuildingColumns = 2;
+    int32 Seed = 0;
+    SpecData->TryGetNumberField(TEXT("road_width"), RoadWidth);
+    SpecData->TryGetNumberField(TEXT("sidewalk_width"), SidewalkWidth);
+    SpecData->TryGetNumberField(TEXT("building_rows"), BuildingRows);
+    SpecData->TryGetNumberField(TEXT("building_columns"), BuildingColumns);
+    SpecData->TryGetNumberField(TEXT("seed"), Seed);
+    RoadWidth = FMath::Max(RoadWidth, 1.0);
+    SidewalkWidth = FMath::Max(SidewalkWidth, 0.0);
+    Size.X = FMath::Max(Size.X, 1.0);
+    Size.Y = FMath::Max(Size.Y, 1.0);
+    BuildingRows = FMath::Clamp(BuildingRows, 1, 100);
+    BuildingColumns = FMath::Clamp(BuildingColumns, 1, 100);
+
+    const double RoadThickness = 20.0;
+    const double SidewalkThickness = 12.0;
+    const double TotalX = Size.X + 2.0 * RoadWidth;
+    const double TotalY = Size.Y + 2.0 * RoadWidth;
+    struct FRectActor
+    {
+        FString Suffix;
+        FVector Location;
+        FVector Scale;
+        UStaticMesh* Mesh;
+        FString Kind;
+    };
+
+    TArray<FRectActor> Rects;
+    Rects.Add({TEXT("Road_N"), Origin + FVector(0.0, Size.Y * 0.5 + RoadWidth * 0.5, RoadThickness * 0.5), FVector(TotalX / 100.0, RoadWidth / 100.0, RoadThickness / 100.0), &RoadMesh, TEXT("road")});
+    Rects.Add({TEXT("Road_S"), Origin + FVector(0.0, -Size.Y * 0.5 - RoadWidth * 0.5, RoadThickness * 0.5), FVector(TotalX / 100.0, RoadWidth / 100.0, RoadThickness / 100.0), &RoadMesh, TEXT("road")});
+    Rects.Add({TEXT("Road_E"), Origin + FVector(Size.X * 0.5 + RoadWidth * 0.5, 0.0, RoadThickness * 0.5), FVector(RoadWidth / 100.0, TotalY / 100.0, RoadThickness / 100.0), &RoadMesh, TEXT("road")});
+    Rects.Add({TEXT("Road_W"), Origin + FVector(-Size.X * 0.5 - RoadWidth * 0.5, 0.0, RoadThickness * 0.5), FVector(RoadWidth / 100.0, TotalY / 100.0, RoadThickness / 100.0), &RoadMesh, TEXT("road")});
+
+    if (SidewalkWidth > 0.0)
+    {
+        Rects.Add({TEXT("Sidewalk_N"), Origin + FVector(0.0, Size.Y * 0.5 - SidewalkWidth * 0.5, SidewalkThickness * 0.5), FVector(Size.X / 100.0, SidewalkWidth / 100.0, SidewalkThickness / 100.0), &SidewalkMesh, TEXT("sidewalk")});
+        Rects.Add({TEXT("Sidewalk_S"), Origin + FVector(0.0, -Size.Y * 0.5 + SidewalkWidth * 0.5, SidewalkThickness * 0.5), FVector(Size.X / 100.0, SidewalkWidth / 100.0, SidewalkThickness / 100.0), &SidewalkMesh, TEXT("sidewalk")});
+        Rects.Add({TEXT("Sidewalk_E"), Origin + FVector(Size.X * 0.5 - SidewalkWidth * 0.5, 0.0, SidewalkThickness * 0.5), FVector(SidewalkWidth / 100.0, FMath::Max(1.0, Size.Y - 2.0 * SidewalkWidth) / 100.0, SidewalkThickness / 100.0), &SidewalkMesh, TEXT("sidewalk")});
+        Rects.Add({TEXT("Sidewalk_W"), Origin + FVector(-Size.X * 0.5 + SidewalkWidth * 0.5, 0.0, SidewalkThickness * 0.5), FVector(SidewalkWidth / 100.0, FMath::Max(1.0, Size.Y - 2.0 * SidewalkWidth) / 100.0, SidewalkThickness / 100.0), &SidewalkMesh, TEXT("sidewalk")});
+    }
+
+    for (const FRectActor& Rect : Rects)
+    {
+        if (SpawnSceneStaticMeshActor(World, FString::Printf(TEXT("%s_%s"), *NamePrefix, *Rect.Suffix), *Rect.Mesh, Rect.Location, FRotator::ZeroRotator, Rect.Scale, Scene, Group, Rect.Kind, Spawned))
+        {
+            IncrementSceneCount(Counts, Rect.Kind);
+        }
+    }
+
+    const double Padding = FMath::Max(SidewalkWidth + 180.0, 1.0);
+    const double UsableX = FMath::Max(Size.X - 2.0 * Padding, 1.0);
+    const double UsableY = FMath::Max(Size.Y - 2.0 * Padding, 1.0);
+    const double StepX = BuildingColumns > 1 ? UsableX / (BuildingColumns - 1) : 0.0;
+    const double StepY = BuildingRows > 1 ? UsableY / (BuildingRows - 1) : 0.0;
+    const double StartX = Origin.X - UsableX * 0.5;
+    const double StartY = Origin.Y - UsableY * 0.5;
+    FRandomStream Random(Seed);
+    for (int32 Row = 0; Row < BuildingRows; ++Row)
+    {
+        for (int32 Column = 0; Column < BuildingColumns; ++Column)
+        {
+            FVector Scale = BuildingScale * Random.FRandRange(0.85f, 1.25f);
+            const FString Name = FString::Printf(TEXT("%s_Building_%03d_%03d"), *NamePrefix, Row, Column);
+            if (SpawnSceneStaticMeshActor(
+                    World,
+                    Name,
+                    BuildingMesh,
+                    FVector(StartX + Column * StepX, StartY + Row * StepY, Origin.Z),
+                    FRotator(0.0, Random.FRandRange(-8.0f, 8.0f), 0.0),
+                    Scale,
+                    Scene,
+                    Group,
+                    TEXT("building"),
+                    Spawned))
+            {
+                ++Counts.BuildingCount;
+            }
+        }
+    }
+
+    return true;
+}
+
+void GetDistrictPresetScale(const FString& Preset, FVector& OutScale, int32& OutBuildingsPerBlock)
+{
+    FString Normalized = Preset;
+    Normalized.ToLowerInline();
+    if (Normalized == TEXT("residential"))
+    {
+        OutScale = FVector(2.0, 2.0, 2.4);
+        OutBuildingsPerBlock = 2;
+    }
+    else if (Normalized == TEXT("industrial"))
+    {
+        OutScale = FVector(4.5, 3.5, 3.0);
+        OutBuildingsPerBlock = 2;
+    }
+    else if (Normalized == TEXT("beach"))
+    {
+        OutScale = FVector(2.2, 2.2, 1.6);
+        OutBuildingsPerBlock = 1;
+    }
+    else if (Normalized == TEXT("hills"))
+    {
+        OutScale = FVector(2.0, 2.0, 2.8);
+        OutBuildingsPerBlock = 1;
+    }
+    else
+    {
+        OutScale = FVector(2.8, 2.8, 9.0);
+        OutBuildingsPerBlock = 4;
+    }
+}
+
+bool SpawnDistrict(
+    UWorld& World,
+    const TSharedPtr<FJsonObject>& SpecData,
+    UStaticMesh& RoadMesh,
+    UStaticMesh& BuildingMesh,
+    TArray<TSharedPtr<FJsonValue>>& Spawned,
+    FSceneAssemblyCounts& Counts,
+    FString& OutError)
+{
+    FString NamePrefix;
+    if (!SpecData->TryGetStringField(TEXT("name_prefix"), NamePrefix) || NamePrefix.IsEmpty())
+    {
+        OutError = TEXT("scene district requires name_prefix");
+        return false;
+    }
+
+    FString Scene;
+    SpecData->TryGetStringField(TEXT("scene"), Scene);
+    FString Group;
+    SpecData->TryGetStringField(TEXT("group"), Group);
+    FString Preset = TEXT("downtown");
+    SpecData->TryGetStringField(TEXT("preset"), Preset);
+
+    FVector Origin = FVector::ZeroVector;
+    FVector2D BlockSize(2400.0, 1800.0);
+    FVector2D Blocks(2.0, 2.0);
+    if (!ReadVectorField(SpecData, TEXT("origin"), FVector::ZeroVector, Origin) ||
+        !ReadVector2DField(SpecData, TEXT("block_size"), BlockSize, BlockSize) ||
+        !ReadVector2DField(SpecData, TEXT("blocks"), Blocks, Blocks))
+    {
+        OutError = TEXT("origin must have 3 numbers and block_size/blocks must have 2 numbers");
+        return false;
+    }
+
+    int32 BlocksX = FMath::Clamp(FMath::RoundToInt(Blocks.X), 1, 50);
+    int32 BlocksY = FMath::Clamp(FMath::RoundToInt(Blocks.Y), 1, 50);
+    double RoadWidth = 320.0;
+    int32 Seed = 0;
+    SpecData->TryGetNumberField(TEXT("road_width"), RoadWidth);
+    SpecData->TryGetNumberField(TEXT("seed"), Seed);
+    RoadWidth = FMath::Max(RoadWidth, 1.0);
+
+    TSharedRef<FJsonObject> RoadSpec = MakeShared<FJsonObject>();
+    RoadSpec->SetStringField(TEXT("name_prefix"), FString::Printf(TEXT("%s_Road"), *NamePrefix));
+    RoadSpec->SetStringField(TEXT("scene"), Scene);
+    RoadSpec->SetStringField(TEXT("group"), Group);
+    RoadSpec->SetArrayField(TEXT("origin"), MakeVectorArray(Origin.X, Origin.Y, Origin.Z));
+    TArray<TSharedPtr<FJsonValue>> BlockSizeValue;
+    BlockSizeValue.Add(MakeNumberValue(BlockSize.X));
+    BlockSizeValue.Add(MakeNumberValue(BlockSize.Y));
+    RoadSpec->SetArrayField(TEXT("block_size"), BlockSizeValue);
+    RoadSpec->SetNumberField(TEXT("rows"), BlocksY);
+    RoadSpec->SetNumberField(TEXT("columns"), BlocksX);
+    RoadSpec->SetNumberField(TEXT("road_width"), RoadWidth);
+    RoadSpec->SetNumberField(TEXT("road_thickness"), 20.0);
+    if (!SpawnRoadNetwork(World, RoadSpec, RoadMesh, Spawned, Counts, OutError))
+    {
+        return false;
+    }
+
+    FVector BaseScale;
+    int32 BuildingsPerBlock = 4;
+    GetDistrictPresetScale(Preset, BaseScale, BuildingsPerBlock);
+    const double TotalX = BlocksX * BlockSize.X + (BlocksX + 1) * RoadWidth;
+    const double TotalY = BlocksY * BlockSize.Y + (BlocksY + 1) * RoadWidth;
+    FRandomStream Random(Seed);
+
+    TArray<FVector2D> SlotOffsets;
+    SlotOffsets.Add(FVector2D(-0.22, -0.22));
+    SlotOffsets.Add(FVector2D(0.22, -0.22));
+    SlotOffsets.Add(FVector2D(-0.22, 0.22));
+    SlotOffsets.Add(FVector2D(0.22, 0.22));
+    SlotOffsets.Add(FVector2D(0.0, -0.32));
+    SlotOffsets.Add(FVector2D(0.0, 0.32));
+
+    for (int32 Y = 0; Y < BlocksY; ++Y)
+    {
+        for (int32 X = 0; X < BlocksX; ++X)
+        {
+            const double CenterX = Origin.X - TotalX * 0.5 + RoadWidth + BlockSize.X * 0.5 + X * (BlockSize.X + RoadWidth);
+            const double CenterY = Origin.Y - TotalY * 0.5 + RoadWidth + BlockSize.Y * 0.5 + Y * (BlockSize.Y + RoadWidth);
+            for (int32 Slot = 0; Slot < BuildingsPerBlock; ++Slot)
+            {
+                const FVector2D Offset = SlotOffsets[Slot % SlotOffsets.Num()];
+                const FVector Location(
+                    CenterX + Offset.X * BlockSize.X,
+                    CenterY + Offset.Y * BlockSize.Y,
+                    Origin.Z);
+                FVector Scale = BaseScale * Random.FRandRange(0.75f, 1.35f);
+                const FString Name = FString::Printf(TEXT("%s_Building_%03d_%03d_%02d"), *NamePrefix, Y, X, Slot);
+                if (SpawnSceneStaticMeshActor(
+                        World,
+                        Name,
+                        BuildingMesh,
+                        Location,
+                        FRotator(0.0, Random.FRandRange(-12.0f, 12.0f), 0.0),
+                        Scale,
+                        Scene,
+                        Group,
+                        TEXT("building"),
+                        Spawned))
+                {
+                    ++Counts.BuildingCount;
+                }
+            }
+        }
+    }
+
     return true;
 }
 
@@ -2594,6 +3190,10 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         CommandNames.Add(MakeStringValue(TEXT("mesh.create_building")));
         CommandNames.Add(MakeStringValue(TEXT("mesh.create_sign")));
         CommandNames.Add(MakeStringValue(TEXT("static_mesh.set_collision")));
+        CommandNames.Add(MakeStringValue(TEXT("road.create_network")));
+        CommandNames.Add(MakeStringValue(TEXT("scene.bulk_place_on_grid")));
+        CommandNames.Add(MakeStringValue(TEXT("scene.create_city_block")));
+        CommandNames.Add(MakeStringValue(TEXT("scene.create_district")));
         CommandNames.Add(MakeStringValue(TEXT("material.create")));
         CommandNames.Add(MakeStringValue(TEXT("material.create_instance")));
         CommandNames.Add(MakeStringValue(TEXT("material.create_procedural_texture")));
@@ -3088,6 +3688,79 @@ TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
         }
 
         return MakeTaggedResult(TEXT("static_mesh_operation"), MakeStaticMeshOperationResult(Meshes));
+    }
+
+    if (CommandType == TEXT("road_create_network") ||
+        CommandType == TEXT("scene_bulk_place_on_grid") ||
+        CommandType == TEXT("scene_create_city_block") ||
+        CommandType == TEXT("scene_create_district"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        TSharedPtr<FJsonObject> SpecData = GetNestedObjectOrSelf(Data, TEXT("spec"));
+        FString MeshError;
+        TArray<TSharedPtr<FJsonValue>> Spawned;
+        FSceneAssemblyCounts Counts;
+        bool bOk = false;
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "SceneAssembly", "MCP Scene Assembly"));
+        if (CommandType == TEXT("road_create_network"))
+        {
+            UStaticMesh* RoadMesh = LoadSceneStaticMesh(SpecData, TEXT("road_mesh"), TEXT("/Engine/BasicShapes/Cube.Cube"), MeshError);
+            if (!RoadMesh)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), MeshError);
+                return nullptr;
+            }
+            bOk = SpawnRoadNetwork(*World, SpecData, *RoadMesh, Spawned, Counts, MeshError);
+        }
+        else if (CommandType == TEXT("scene_bulk_place_on_grid"))
+        {
+            UStaticMesh* Mesh = LoadSceneStaticMesh(SpecData, TEXT("mesh"), FString(), MeshError);
+            if (!Mesh)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), MeshError);
+                return nullptr;
+            }
+            bOk = SpawnGridPlacement(*World, SpecData, *Mesh, TEXT("building"), Spawned, Counts, MeshError);
+        }
+        else if (CommandType == TEXT("scene_create_city_block"))
+        {
+            UStaticMesh* RoadMesh = LoadSceneStaticMesh(SpecData, TEXT("road_mesh"), TEXT("/Engine/BasicShapes/Cube.Cube"), MeshError);
+            UStaticMesh* SidewalkMesh = LoadSceneStaticMesh(SpecData, TEXT("sidewalk_mesh"), TEXT("/Engine/BasicShapes/Cube.Cube"), MeshError);
+            UStaticMesh* BuildingMesh = LoadSceneStaticMesh(SpecData, TEXT("building_mesh"), FString(), MeshError);
+            if (!RoadMesh || !SidewalkMesh || !BuildingMesh)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), MeshError);
+                return nullptr;
+            }
+            bOk = SpawnCityBlock(*World, SpecData, *RoadMesh, *SidewalkMesh, *BuildingMesh, Spawned, Counts, MeshError);
+        }
+        else
+        {
+            UStaticMesh* RoadMesh = LoadSceneStaticMesh(SpecData, TEXT("road_mesh"), TEXT("/Engine/BasicShapes/Cube.Cube"), MeshError);
+            UStaticMesh* BuildingMesh = LoadSceneStaticMesh(SpecData, TEXT("building_mesh"), FString(), MeshError);
+            if (!RoadMesh || !BuildingMesh)
+            {
+                OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), MeshError);
+                return nullptr;
+            }
+            bOk = SpawnDistrict(*World, SpecData, *RoadMesh, *BuildingMesh, Spawned, Counts, MeshError);
+        }
+
+        if (!bOk)
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), MeshError);
+            return nullptr;
+        }
+
+        World->MarkPackageDirty();
+        return MakeTaggedResult(TEXT("scene_assembly"), MakeSceneAssemblyResult(Spawned, Counts));
     }
 
     if (CommandType == TEXT("material_create"))
