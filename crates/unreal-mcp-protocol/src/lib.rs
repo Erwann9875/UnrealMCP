@@ -10,15 +10,16 @@ pub use codec::{
 pub use commands::{
     ActorQuery, ActorSpawnSpec, AssetImportItem, AssetImportOperation, AssetImportResult,
     AssetImportSpec, AssetOperation, AssetValidateSpec, AssetValidation, AssetValidationResult,
-    BlueprintComponentOperation, BlueprintOperation, BridgeStatus, Command, CommandResult,
-    GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec, LandscapeCreateSpec,
-    LandscapeHeightPatch, LandscapeLayerPaint, LandscapeOperation, LevelInfo, LevelList,
-    LevelOperation, LightComponentSpec, LightSpec, LightSummary, LightingOperation,
-    MaterialAppliedActor, MaterialApplyResult, MaterialAssignment, MaterialOperation,
-    MaterialParameter, MaterialParameterOperation, MaterialParameterValue, PlacementSnapActor,
-    PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation, RuntimeAnimationOperation,
-    RuntimeAnimationSpec, SpawnedActor, StaticMeshCollisionSpec, StaticMeshComponentSpec,
-    StaticMeshOperation, StaticMeshOperationResult, TextureCreateSpec, Transform, WorldQueryResult,
+    BlueprintComponentOperation, BlueprintOperation, BridgeStatus, CityBlockSpec, Command,
+    CommandResult, DistrictSpec, GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec,
+    GridPlacementSpec, LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint,
+    LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightComponentSpec, LightSpec,
+    LightSummary, LightingOperation, MaterialAppliedActor, MaterialApplyResult, MaterialAssignment,
+    MaterialOperation, MaterialParameter, MaterialParameterOperation, MaterialParameterValue,
+    PlacementSnapActor, PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation,
+    RoadNetworkSpec, RuntimeAnimationOperation, RuntimeAnimationSpec, SceneAssemblyResult,
+    SpawnedActor, StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation,
+    StaticMeshOperationResult, TextureCreateSpec, Transform, WorldQueryResult,
 };
 pub use envelope::{ErrorMode, IndexedError, RequestEnvelope, ResponseEnvelope, ResponseMode};
 pub use error::{ProtocolError, ProtocolResult};

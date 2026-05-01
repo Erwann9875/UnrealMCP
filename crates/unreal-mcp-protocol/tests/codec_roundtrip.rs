@@ -2,14 +2,15 @@ use unreal_mcp_protocol::{
     ActorQuery, ActorSpawnSpec, AssetImportItem, AssetImportOperation, AssetImportResult,
     AssetImportSpec, AssetOperation, AssetValidateSpec, AssetValidation, AssetValidationResult,
     BlueprintComponentOperation, BlueprintOperation, Command, CommandResult, ErrorMode,
-    GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec, IndexedError,
-    LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint, LandscapeOperation, LevelInfo,
-    LevelList, LevelOperation, LightComponentSpec, LightSpec, LightSummary, LightingOperation,
-    MaterialAppliedActor, MaterialApplyResult, MaterialAssignment, MaterialOperation,
-    MaterialParameter, MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
-    PlacementSnapSpec, ProceduralTextureOperation, ProtocolError, RequestEnvelope,
-    ResponseEnvelope, ResponseMode, RuntimeAnimationOperation, RuntimeAnimationSpec, SpawnedActor,
-    StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation,
+    CityBlockSpec, DistrictSpec, GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec,
+    GridPlacementSpec, IndexedError, LandscapeCreateSpec, LandscapeHeightPatch,
+    LandscapeLayerPaint, LandscapeOperation, LevelInfo, LevelList, LevelOperation,
+    LightComponentSpec, LightSpec, LightSummary, LightingOperation, MaterialAppliedActor,
+    MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
+    MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult, PlacementSnapSpec,
+    ProceduralTextureOperation, ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode,
+    RoadNetworkSpec, RuntimeAnimationOperation, RuntimeAnimationSpec, SceneAssemblyResult,
+    SpawnedActor, StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation,
     StaticMeshOperationResult, TextureCreateSpec, Transform, WorldQueryResult,
 };
 
@@ -758,6 +759,116 @@ fn asset_import_mesh_results_roundtrip_preserve_payloads() {
                 count: 1,
             }),
         ],
+    );
+
+    let bytes = encode_msgpack_response(&response).expect("encode response");
+    let decoded = decode_msgpack_response(&bytes).expect("decode response");
+
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn scene_assembly_requests_roundtrip_preserve_payloads() {
+    let request = RequestEnvelope::new(
+        66,
+        ResponseMode::Summary,
+        ErrorMode::Continue,
+        vec![
+            Command::RoadCreateNetwork {
+                spec: RoadNetworkSpec {
+                    name_prefix: "MCP_Road".to_string(),
+                    scene: Some("la".to_string()),
+                    group: Some("downtown_roads".to_string()),
+                    origin: [0.0, 0.0, 0.0],
+                    rows: 3,
+                    columns: 4,
+                    block_size: [2400.0, 1800.0],
+                    road_width: 320.0,
+                    road_thickness: 20.0,
+                    road_mesh: Some("/Engine/BasicShapes/Cube.Cube".to_string()),
+                },
+            },
+            Command::SceneBulkPlaceOnGrid {
+                spec: GridPlacementSpec {
+                    name_prefix: "MCP_Tower".to_string(),
+                    mesh: "/Game/MCP/Meshes/SM_Tower".to_string(),
+                    scene: Some("la".to_string()),
+                    group: Some("downtown_buildings".to_string()),
+                    origin: [0.0, 0.0, 0.0],
+                    rows: 2,
+                    columns: 3,
+                    spacing: [500.0, 600.0],
+                    rotation: [0.0, 0.0, 0.0],
+                    scale: [1.0, 1.0, 1.0],
+                    yaw_variation: 12.0,
+                    scale_variation: 0.2,
+                    seed: 42,
+                },
+            },
+            Command::SceneCreateCityBlock {
+                spec: CityBlockSpec {
+                    name_prefix: "MCP_Block".to_string(),
+                    scene: Some("la".to_string()),
+                    group: Some("block_a".to_string()),
+                    origin: [0.0, 0.0, 0.0],
+                    size: [2400.0, 1800.0],
+                    road_width: 320.0,
+                    sidewalk_width: 180.0,
+                    road_mesh: Some("/Engine/BasicShapes/Cube.Cube".to_string()),
+                    sidewalk_mesh: Some("/Engine/BasicShapes/Cube.Cube".to_string()),
+                    building_mesh: "/Game/MCP/Meshes/SM_Tower".to_string(),
+                    building_rows: 2,
+                    building_columns: 3,
+                    building_scale: [2.0, 2.0, 8.0],
+                    seed: 7,
+                },
+            },
+            Command::SceneCreateDistrict {
+                spec: DistrictSpec {
+                    name_prefix: "MCP_Downtown".to_string(),
+                    preset: "downtown".to_string(),
+                    scene: Some("la".to_string()),
+                    group: Some("downtown".to_string()),
+                    origin: [0.0, 0.0, 0.0],
+                    blocks: [3, 2],
+                    block_size: [2400.0, 1800.0],
+                    road_width: 320.0,
+                    road_mesh: Some("/Engine/BasicShapes/Cube.Cube".to_string()),
+                    building_mesh: "/Game/MCP/Meshes/SM_Tower".to_string(),
+                    seed: 99,
+                },
+            },
+        ],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn scene_assembly_results_roundtrip_preserve_payloads() {
+    let response = ResponseEnvelope::success(
+        67,
+        9,
+        vec![CommandResult::SceneAssembly(SceneAssemblyResult {
+            spawned: vec![
+                SpawnedActor {
+                    name: "MCP_Road_0".to_string(),
+                    path: "PersistentLevel.MCP_Road_0".to_string(),
+                },
+                SpawnedActor {
+                    name: "MCP_Tower_0_0".to_string(),
+                    path: "PersistentLevel.MCP_Tower_0_0".to_string(),
+                },
+            ],
+            count: 2,
+            road_count: 1,
+            sidewalk_count: 0,
+            building_count: 1,
+            prop_count: 0,
+        })],
     );
 
     let bytes = encode_msgpack_response(&response).expect("encode response");

@@ -59,6 +59,18 @@ pub enum Command {
     StaticMeshSetCollision {
         spec: StaticMeshCollisionSpec,
     },
+    RoadCreateNetwork {
+        spec: RoadNetworkSpec,
+    },
+    SceneBulkPlaceOnGrid {
+        spec: GridPlacementSpec,
+    },
+    SceneCreateCityBlock {
+        spec: CityBlockSpec,
+    },
+    SceneCreateDistrict {
+        spec: DistrictSpec,
+    },
     MaterialCreate {
         path: String,
         base_color: [f64; 4],
@@ -446,6 +458,70 @@ pub struct StaticMeshCollisionSpec {
     pub rebuild: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoadNetworkSpec {
+    pub name_prefix: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub origin: [f64; 3],
+    pub rows: u32,
+    pub columns: u32,
+    pub block_size: [f64; 2],
+    pub road_width: f64,
+    pub road_thickness: f64,
+    pub road_mesh: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GridPlacementSpec {
+    pub name_prefix: String,
+    pub mesh: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub origin: [f64; 3],
+    pub rows: u32,
+    pub columns: u32,
+    pub spacing: [f64; 2],
+    pub rotation: [f64; 3],
+    pub scale: [f64; 3],
+    pub yaw_variation: f64,
+    pub scale_variation: f64,
+    pub seed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityBlockSpec {
+    pub name_prefix: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub origin: [f64; 3],
+    pub size: [f64; 2],
+    pub road_width: f64,
+    pub sidewalk_width: f64,
+    pub road_mesh: Option<String>,
+    pub sidewalk_mesh: Option<String>,
+    pub building_mesh: String,
+    pub building_rows: u32,
+    pub building_columns: u32,
+    pub building_scale: [f64; 3],
+    pub seed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DistrictSpec {
+    pub name_prefix: String,
+    pub preset: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub origin: [f64; 3],
+    pub blocks: [u32; 2],
+    pub block_size: [f64; 2],
+    pub road_width: f64,
+    pub road_mesh: Option<String>,
+    pub building_mesh: String,
+    pub seed: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetOperation {
     pub path: String,
@@ -499,6 +575,16 @@ pub struct StaticMeshOperation {
 pub struct StaticMeshOperationResult {
     pub meshes: Vec<StaticMeshOperation>,
     pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SceneAssemblyResult {
+    pub spawned: Vec<SpawnedActor>,
+    pub count: usize,
+    pub road_count: usize,
+    pub sidewalk_count: usize,
+    pub building_count: usize,
+    pub prop_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -625,6 +711,7 @@ pub enum CommandResult {
     AssetValidation(AssetValidationResult),
     GeneratedMesh(GeneratedMeshOperation),
     StaticMeshOperation(StaticMeshOperationResult),
+    SceneAssembly(SceneAssemblyResult),
     MaterialOperation(MaterialOperation),
     ProceduralTextureOperation(ProceduralTextureOperation),
     MaterialParameterOperation(MaterialParameterOperation),
