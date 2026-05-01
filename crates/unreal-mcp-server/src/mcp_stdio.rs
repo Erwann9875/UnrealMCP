@@ -112,6 +112,38 @@ fn tools_list_response(id: Value) -> Value {
                 tool_definition(
                     "connection.capabilities",
                     "Return bridge-supported command names."
+                ),
+                tool_definition(
+                    "level.create",
+                    "Create a new Unreal level asset."
+                ),
+                tool_definition(
+                    "level.open",
+                    "Open an Unreal level asset."
+                ),
+                tool_definition(
+                    "level.save",
+                    "Save the current or specified Unreal level."
+                ),
+                tool_definition(
+                    "level.list",
+                    "List project level assets."
+                ),
+                tool_definition(
+                    "world.bulk_spawn",
+                    "Spawn many static mesh actors in one bridge request."
+                ),
+                tool_definition(
+                    "world.bulk_delete",
+                    "Delete actors by name or tag in one bridge request."
+                ),
+                tool_definition(
+                    "world.query",
+                    "Query actors by name or tag."
+                ),
+                tool_definition(
+                    "world.snapshot",
+                    "Write a compact world snapshot to disk."
                 )
             ]
         }
@@ -138,7 +170,12 @@ async fn tools_call_response(id: Value, params: Option<&Value>, tools: &Connecti
         return json_rpc_error(id, -32602, "Missing tool name".to_string());
     };
 
-    match call_tool(name, tools).await {
+    let arguments = params
+        .and_then(|params| params.get("arguments"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    match call_tool(name, arguments, tools).await {
         Ok(response) => json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -175,11 +212,23 @@ async fn tools_call_response(id: Value, params: Option<&Value>, tools: &Connecti
     }
 }
 
-async fn call_tool(name: &str, tools: &ConnectionTools) -> anyhow::Result<ToolResponse> {
+async fn call_tool(
+    name: &str,
+    arguments: Value,
+    tools: &ConnectionTools,
+) -> anyhow::Result<ToolResponse> {
     match name {
         "connection.ping" => tools.ping().await,
         "connection.status" => tools.status().await,
         "connection.capabilities" => tools.capabilities().await,
+        "level.create" => tools.level_create(arguments).await,
+        "level.open" => tools.level_open(arguments).await,
+        "level.save" => tools.level_save(arguments).await,
+        "level.list" => tools.level_list().await,
+        "world.bulk_spawn" => tools.world_bulk_spawn(arguments).await,
+        "world.bulk_delete" => tools.world_bulk_delete(arguments).await,
+        "world.query" => tools.world_query(arguments).await,
+        "world.snapshot" => tools.world_snapshot(arguments).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }

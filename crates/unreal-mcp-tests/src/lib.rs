@@ -4,7 +4,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use unreal_mcp_protocol::{
-    decode_msgpack_request, encode_msgpack_response, Command, CommandResult, ResponseEnvelope,
+    decode_msgpack_request, encode_msgpack_response, ActorQuery, BridgeStatus, Command,
+    CommandResult, LevelInfo, LevelList, LevelOperation, ResponseEnvelope, SpawnedActor,
+    Transform, WorldQueryResult,
 };
 
 pub struct FakeBridge {
@@ -64,7 +66,7 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
             Command::Ping => CommandResult::Pong {
                 bridge_version: "fake-0.1.0".to_string(),
             },
-            Command::Status => CommandResult::Status(unreal_mcp_protocol::BridgeStatus {
+            Command::Status => CommandResult::Status(BridgeStatus {
                 connected: true,
                 bridge_version: Some("fake-0.1.0".to_string()),
                 unreal_version: Some("fake-unreal".to_string()),
@@ -74,7 +76,82 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "connection.ping".to_string(),
                     "connection.status".to_string(),
                     "connection.capabilities".to_string(),
+                    "level.create".to_string(),
+                    "level.open".to_string(),
+                    "level.save".to_string(),
+                    "level.list".to_string(),
+                    "world.bulk_spawn".to_string(),
+                    "world.bulk_delete".to_string(),
+                    "world.query".to_string(),
+                    "world.snapshot".to_string(),
                 ],
+            },
+            Command::LevelCreate { path, open, save } => CommandResult::LevelOperation(
+                LevelOperation {
+                    path,
+                    opened: open,
+                    saved: save,
+                },
+            ),
+            Command::LevelOpen { path } => CommandResult::LevelOperation(LevelOperation {
+                path,
+                opened: true,
+                saved: false,
+            }),
+            Command::LevelSave { path } => CommandResult::LevelOperation(LevelOperation {
+                path: path.unwrap_or_else(|| "/Game/MCP/Generated/L_Fake".to_string()),
+                opened: true,
+                saved: true,
+            }),
+            Command::LevelList => CommandResult::LevelList(LevelList {
+                levels: vec![LevelInfo {
+                    path: "/Game/MCP/Generated/L_Fake".to_string(),
+                    name: "L_Fake".to_string(),
+                }],
+            }),
+            Command::WorldBulkSpawn { actors } => {
+                let spawned = actors
+                    .into_iter()
+                    .map(|actor| SpawnedActor {
+                        path: format!("PersistentLevel.{}", actor.name),
+                        name: actor.name,
+                    })
+                    .collect::<Vec<_>>();
+                CommandResult::WorldBulkSpawn {
+                    count: spawned.len(),
+                    spawned,
+                }
+            }
+            Command::WorldBulkDelete { names, tags } => {
+                let deleted = if names.is_empty() {
+                    tags.into_iter()
+                        .map(|tag| format!("deleted_by_tag:{tag}"))
+                        .collect::<Vec<_>>()
+                } else {
+                    names
+                };
+                CommandResult::WorldBulkDelete {
+                    count: deleted.len(),
+                    deleted,
+                }
+            }
+            Command::WorldQuery { .. } => CommandResult::WorldQuery(WorldQueryResult {
+                actors: vec![ActorQuery {
+                    name: "MCP_Test_Cube".to_string(),
+                    path: "PersistentLevel.MCP_Test_Cube".to_string(),
+                    class_name: "StaticMeshActor".to_string(),
+                    transform: Transform {
+                        location: [0.0, 0.0, 50.0],
+                        rotation: [0.0, 0.0, 0.0],
+                        scale: [1.0, 1.0, 1.0],
+                    },
+                    tags: vec!["mcp.generated".to_string()],
+                }],
+                total_count: 1,
+            }),
+            Command::WorldSnapshot { path, .. } => CommandResult::WorldSnapshot {
+                path: path.unwrap_or_else(|| "Saved/UnrealMCP/snapshots/world.json".to_string()),
+                total_count: 1,
             },
         })
         .collect();

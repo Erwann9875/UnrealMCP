@@ -31,7 +31,7 @@ async fn stdio_initialize_returns_tools_capability() {
 }
 
 #[tokio::test]
-async fn stdio_tools_list_returns_connection_tools() {
+async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     let response = run_single_request(json!({
         "jsonrpc": "2.0",
         "id": "tools",
@@ -52,7 +52,15 @@ async fn stdio_tools_list_returns_connection_tools() {
         vec![
             "connection.ping",
             "connection.status",
-            "connection.capabilities"
+            "connection.capabilities",
+            "level.create",
+            "level.open",
+            "level.save",
+            "level.list",
+            "world.bulk_spawn",
+            "world.bulk_delete",
+            "world.query",
+            "world.snapshot",
         ]
     );
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
@@ -82,6 +90,95 @@ async fn stdio_tools_call_dispatches_connection_ping() {
         .as_str()
         .expect("summary text")
         .contains("fake-0.1.0"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_level_list() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "level.list",
+            "arguments": {}
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("1 level"));
+    assert!(content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("/Game/MCP/Generated/L_Fake"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_world_bulk_spawn() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "world.bulk_spawn",
+            "arguments": {
+                "actors": [
+                    {
+                        "name": "MCP_Test_Cube",
+                        "mesh": "/Engine/BasicShapes/Cube.Cube",
+                        "location": [0.0, 0.0, 50.0],
+                        "rotation": [0.0, 0.0, 0.0],
+                        "scale": [1.0, 1.0, 1.0],
+                        "scene": "test_scene",
+                        "group": "test_group"
+                    }
+                ]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Spawned 1 actor"));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_world_query() {
+    let response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+            "name": "world.query",
+            "arguments": {
+                "tags": ["mcp.generated"],
+                "include_generated": true,
+                "limit": 10
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("1 actor"));
 }
 
 #[tokio::test]
