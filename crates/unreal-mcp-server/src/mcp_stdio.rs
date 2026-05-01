@@ -360,6 +360,31 @@ fn tools_list_response(id: Value) -> Value {
                     "game.create_objective_flow",
                     "Create ordered editor objective flow markers.",
                     game_create_objective_flow_schema()
+                ),
+                tool_definition(
+                    "gameplay.create_system",
+                    "Create or update a gameplay runtime manager actor.",
+                    gameplay_create_system_schema()
+                ),
+                tool_definition(
+                    "gameplay.bind_collectibles",
+                    "Bind collectible runtime components to selected actors.",
+                    gameplay_bind_schema()
+                ),
+                tool_definition(
+                    "gameplay.bind_checkpoints",
+                    "Bind checkpoint runtime components to selected actors.",
+                    gameplay_bind_schema()
+                ),
+                tool_definition(
+                    "gameplay.bind_interactions",
+                    "Bind interaction runtime components to selected actors.",
+                    gameplay_bind_schema()
+                ),
+                tool_definition(
+                    "gameplay.bind_objective_flow",
+                    "Bind ordered objective runtime components to selected actors.",
+                    gameplay_bind_schema()
                 )
             ]
         }
@@ -1245,6 +1270,37 @@ fn game_create_objective_flow_schema() -> Value {
     })
 }
 
+fn gameplay_create_system_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "scene": { "type": "string" },
+            "group": { "type": "string" },
+            "location": vec3_schema(),
+            "tags": string_array_schema()
+        },
+        "required": ["name"],
+        "additionalProperties": false
+    })
+}
+
+fn gameplay_bind_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "names": string_array_schema(),
+            "tags": string_array_schema(),
+            "manager_name": { "type": "string" },
+            "include_generated": { "type": "boolean" },
+            "value": { "type": "integer" },
+            "destroy_on_collect": { "type": "boolean" }
+        },
+        "required": [],
+        "additionalProperties": false
+    })
+}
+
 fn world_bulk_delete_schema() -> Value {
     json!({
         "type": "object",
@@ -1403,6 +1459,11 @@ async fn call_tool(
         "game.create_interaction" => tools.game_create_interaction(arguments).await,
         "game.create_collectibles" => tools.game_create_collectibles(arguments).await,
         "game.create_objective_flow" => tools.game_create_objective_flow(arguments).await,
+        "gameplay.create_system" => tools.gameplay_create_system(arguments).await,
+        "gameplay.bind_collectibles" => tools.gameplay_bind_collectibles(arguments).await,
+        "gameplay.bind_checkpoints" => tools.gameplay_bind_checkpoints(arguments).await,
+        "gameplay.bind_interactions" => tools.gameplay_bind_interactions(arguments).await,
+        "gameplay.bind_objective_flow" => tools.gameplay_bind_objective_flow(arguments).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }

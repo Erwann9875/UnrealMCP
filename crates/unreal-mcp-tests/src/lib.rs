@@ -7,9 +7,10 @@ use unreal_mcp_protocol::{
     decode_msgpack_request, encode_msgpack_response, ActorQuery, AssetImportOperation,
     AssetImportResult, AssetOperation, AssetValidation, AssetValidationResult,
     BlueprintComponentOperation, BlueprintOperation, BridgeStatus, Command, CommandResult,
-    GameplayOperationResult, GeneratedMeshOperation, LandscapeOperation, LevelInfo, LevelList,
-    LevelOperation, LightSummary, LightingOperation, MaterialAppliedActor, MaterialApplyResult,
-    MaterialOperation, MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
+    GameplayBindingSummary, GameplayOperationResult, GameplayRuntimeOperationResult,
+    GeneratedMeshOperation, LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightSummary,
+    LightingOperation, MaterialAppliedActor, MaterialApplyResult, MaterialOperation,
+    MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult,
     ProceduralTextureOperation, ResponseEnvelope, RuntimeAnimationOperation, SceneAssemblyResult,
     SpawnedActor, StaticMeshOperation, StaticMeshOperationResult, Transform, WorldQueryResult,
 };
@@ -130,6 +131,11 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                     "game.create_interaction".to_string(),
                     "game.create_collectibles".to_string(),
                     "game.create_objective_flow".to_string(),
+                    "gameplay.create_system".to_string(),
+                    "gameplay.bind_collectibles".to_string(),
+                    "gameplay.bind_checkpoints".to_string(),
+                    "gameplay.bind_interactions".to_string(),
+                    "gameplay.bind_objective_flow".to_string(),
                 ],
             },
             Command::LevelCreate { path, open, save } => {
@@ -558,6 +564,41 @@ async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                 let count = spec.steps.len();
                 gameplay_operation_result(&spec.name_prefix, count, 0, 0, 0, 0, count)
             }
+            Command::GameplayCreateSystem { spec } => {
+                gameplay_runtime_operation_with_manager(&spec.name)
+            }
+            Command::GameplayBindCollectibles { .. } => gameplay_runtime_binding_result(
+                "MCP_Fake_Collectible",
+                "MCP_CollectibleRuntime",
+                1,
+                0,
+                0,
+                0,
+            ),
+            Command::GameplayBindCheckpoints { .. } => gameplay_runtime_binding_result(
+                "MCP_Fake_Checkpoint",
+                "MCP_CheckpointRuntime",
+                0,
+                1,
+                0,
+                0,
+            ),
+            Command::GameplayBindInteractions { .. } => gameplay_runtime_binding_result(
+                "MCP_Fake_Interaction",
+                "MCP_InteractionRuntime",
+                0,
+                0,
+                1,
+                0,
+            ),
+            Command::GameplayBindObjectiveFlow { .. } => gameplay_runtime_binding_result(
+                "MCP_Fake_Objective",
+                "MCP_ObjectiveRuntime",
+                0,
+                0,
+                0,
+                1,
+            ),
         })
         .collect();
 
@@ -626,6 +667,44 @@ fn gameplay_operation_result(
         checkpoint_count,
         interaction_count,
         collectible_count,
+        objective_count,
+    })
+}
+
+fn gameplay_runtime_operation_with_manager(name: &str) -> CommandResult {
+    CommandResult::GameplayRuntimeOperation(GameplayRuntimeOperationResult {
+        manager: Some(SpawnedActor {
+            name: name.to_string(),
+            path: format!("PersistentLevel.{name}"),
+        }),
+        bindings: vec![],
+        count: 1,
+        collectible_count: 0,
+        checkpoint_count: 0,
+        interaction_count: 0,
+        objective_count: 0,
+    })
+}
+
+fn gameplay_runtime_binding_result(
+    actor_name: &str,
+    component_name: &str,
+    collectible_count: usize,
+    checkpoint_count: usize,
+    interaction_count: usize,
+    objective_count: usize,
+) -> CommandResult {
+    CommandResult::GameplayRuntimeOperation(GameplayRuntimeOperationResult {
+        manager: None,
+        bindings: vec![GameplayBindingSummary {
+            name: actor_name.to_string(),
+            path: format!("PersistentLevel.{actor_name}"),
+            component: component_name.to_string(),
+        }],
+        count: 1,
+        collectible_count,
+        checkpoint_count,
+        interaction_count,
         objective_count,
     })
 }

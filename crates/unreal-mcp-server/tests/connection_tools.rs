@@ -103,13 +103,13 @@ async fn connection_tools_return_compact_capabilities_response() {
     let response: ToolResponse = tools.capabilities().await.expect("capabilities response");
 
     assert_eq!(response.tool_name, "connection.capabilities");
-    assert!(response.summary.contains("52 commands"));
+    assert!(response.summary.contains("57 commands"));
     assert_eq!(
         response.data["commands"]
             .as_array()
             .expect("commands should be an array")
             .len(),
-        52
+        57
     );
     assert_eq!(
         response.data["commands"][0].as_str(),

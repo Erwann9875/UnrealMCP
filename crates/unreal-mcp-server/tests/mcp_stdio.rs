@@ -102,6 +102,11 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
             "game.create_interaction",
             "game.create_collectibles",
             "game.create_objective_flow",
+            "gameplay.create_system",
+            "gameplay.bind_collectibles",
+            "gameplay.bind_checkpoints",
+            "gameplay.bind_interactions",
+            "gameplay.bind_objective_flow",
         ]
     );
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
@@ -281,6 +286,26 @@ async fn stdio_tools_list_returns_connection_level_and_world_tools() {
     assert_eq!(
         tool_by_name("game.create_objective_flow")["inputSchema"]["required"],
         json!(["name_prefix"])
+    );
+    assert_eq!(
+        tool_by_name("gameplay.create_system")["inputSchema"]["required"],
+        json!(["name"])
+    );
+    assert_eq!(
+        tool_by_name("gameplay.bind_collectibles")["inputSchema"]["required"],
+        json!([])
+    );
+    assert_eq!(
+        tool_by_name("gameplay.bind_checkpoints")["inputSchema"]["required"],
+        json!([])
+    );
+    assert_eq!(
+        tool_by_name("gameplay.bind_interactions")["inputSchema"]["required"],
+        json!([])
+    );
+    assert_eq!(
+        tool_by_name("gameplay.bind_objective_flow")["inputSchema"]["required"],
+        json!([])
     );
 }
 
@@ -1200,6 +1225,69 @@ async fn stdio_tools_call_dispatches_gameplay_foundation_tools() {
         .as_str()
         .expect("data text")
         .contains("\"objective_count\""));
+}
+
+#[tokio::test]
+async fn stdio_tools_call_dispatches_gameplay_runtime_tools() {
+    let system_response = run_single_request(json!({
+        "jsonrpc": "2.0",
+        "id": 24,
+        "method": "tools/call",
+        "params": {
+            "name": "gameplay.create_system",
+            "arguments": {
+                "name": "MCP_GameplayManager",
+                "scene": "prototype",
+                "group": "runtime",
+                "location": [0.0, 0.0, 100.0],
+                "tags": ["mcp.scene:prototype"]
+            }
+        }
+    }))
+    .await;
+
+    assert_eq!(system_response["result"]["isError"], false);
+    let system_content = system_response["result"]["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(system_content[0]["text"]
+        .as_str()
+        .expect("summary text")
+        .contains("Configured gameplay runtime"));
+    assert!(system_content[1]["text"]
+        .as_str()
+        .expect("data text")
+        .contains("\"manager\""));
+
+    for (id, name, expected_field) in [
+        (25, "gameplay.bind_collectibles", "\"collectible_count\""),
+        (26, "gameplay.bind_checkpoints", "\"checkpoint_count\""),
+        (27, "gameplay.bind_interactions", "\"interaction_count\""),
+        (28, "gameplay.bind_objective_flow", "\"objective_count\""),
+    ] {
+        let response = run_single_request(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": {
+                    "manager_name": "MCP_GameplayManager",
+                    "include_generated": true
+                }
+            }
+        }))
+        .await;
+
+        assert_eq!(response["result"]["isError"], false, "{name}");
+        let content = response["result"]["content"]
+            .as_array()
+            .expect("content should be an array");
+        assert!(content[1]["text"]
+            .as_str()
+            .expect("data text")
+            .contains(expected_field));
+    }
 }
 
 #[tokio::test]

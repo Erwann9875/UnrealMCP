@@ -7,7 +7,8 @@ use unreal_mcp_protocol::{
     AssetValidateSpec, AssetValidationResult, BlueprintComponentOperation, BlueprintOperation,
     BridgeStatus, CityBlockSpec, Command, CommandResult, DistrictSpec, ErrorMode,
     GameCheckpointSpec, GameCollectiblesSpec, GameInteractionSpec, GameObjectiveFlowSpec,
-    GameObjectiveStepSpec, GamePlayerSpec, GameplayOperationResult, GeneratedBuildingSpec,
+    GameObjectiveStepSpec, GamePlayerSpec, GameplayBindSpec, GameplayCreateSystemSpec,
+    GameplayOperationResult, GameplayRuntimeOperationResult, GeneratedBuildingSpec,
     GeneratedMeshOperation, GeneratedSignSpec, GridPlacementSpec, LandscapeCreateSpec,
     LandscapeHeightPatch, LandscapeLayerPaint, LandscapeOperation, LevelOperation,
     LightComponentSpec, LightSpec, LightingOperation, MaterialApplyResult, MaterialAssignment,
@@ -1307,6 +1308,111 @@ impl ConnectionTools {
         ))
     }
 
+    pub async fn gameplay_create_system(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameplayCreateSystemArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "gameplay.create_system",
+                Command::GameplayCreateSystem {
+                    spec: args.into_spec(),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_runtime_operation("gameplay.create_system", &response)?;
+        Ok(gameplay_runtime_operation_response(
+            "gameplay.create_system",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn gameplay_bind_collectibles(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameplayBindArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "gameplay.bind_collectibles",
+                Command::GameplayBindCollectibles {
+                    spec: args.into_spec("mcp.gameplay_actor:collectible"),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_runtime_operation("gameplay.bind_collectibles", &response)?;
+        Ok(gameplay_runtime_operation_response(
+            "gameplay.bind_collectibles",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn gameplay_bind_checkpoints(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameplayBindArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "gameplay.bind_checkpoints",
+                Command::GameplayBindCheckpoints {
+                    spec: args.into_spec("mcp.gameplay_actor:checkpoint"),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_runtime_operation("gameplay.bind_checkpoints", &response)?;
+        Ok(gameplay_runtime_operation_response(
+            "gameplay.bind_checkpoints",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn gameplay_bind_interactions(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameplayBindArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "gameplay.bind_interactions",
+                Command::GameplayBindInteractions {
+                    spec: args.into_spec("mcp.gameplay_actor:interaction"),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_runtime_operation("gameplay.bind_interactions", &response)?;
+        Ok(gameplay_runtime_operation_response(
+            "gameplay.bind_interactions",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
+    pub async fn gameplay_bind_objective_flow(
+        &self,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolResponse> {
+        let args: GameplayBindArgs = serde_json::from_value(arguments)?;
+        let response = self
+            .send_single(
+                "gameplay.bind_objective_flow",
+                Command::GameplayBindObjectiveFlow {
+                    spec: args.into_spec("mcp.gameplay_actor:objective"),
+                },
+            )
+            .await?;
+        let result = expect_gameplay_runtime_operation("gameplay.bind_objective_flow", &response)?;
+        Ok(gameplay_runtime_operation_response(
+            "gameplay.bind_objective_flow",
+            response.elapsed_ms,
+            result,
+        ))
+    }
+
     async fn send_single(
         &self,
         command_name: &str,
@@ -1645,6 +1751,23 @@ fn expect_gameplay_operation(
     }
 }
 
+fn expect_gameplay_runtime_operation(
+    command_name: &str,
+    response: &ResponseEnvelope,
+) -> anyhow::Result<GameplayRuntimeOperationResult> {
+    match response.results.as_slice() {
+        [CommandResult::GameplayRuntimeOperation(operation)] => Ok(operation.clone()),
+        [] => bail!("unexpected {command_name} response: missing gameplay runtime operation result"),
+        [result] => bail!(
+            "unexpected {command_name} response: expected gameplay runtime operation, got {result:?}"
+        ),
+        results => bail!(
+            "unexpected {command_name} response: expected exactly one gameplay runtime operation result, got {} results",
+            results.len()
+        ),
+    }
+}
+
 fn expect_landscape_operation(
     command_name: &str,
     response: &ResponseEnvelope,
@@ -1892,6 +2015,27 @@ fn gameplay_operation_response(
             "collectible_count": result.collectible_count,
             "objective_count": result.objective_count,
             "spawned": result.spawned,
+            "elapsed_ms": elapsed_ms
+        }),
+    }
+}
+
+fn gameplay_runtime_operation_response(
+    tool_name: &'static str,
+    elapsed_ms: u32,
+    result: GameplayRuntimeOperationResult,
+) -> ToolResponse {
+    ToolResponse {
+        tool_name,
+        summary: format!("Configured gameplay runtime on {} actor(s).", result.count),
+        data: json!({
+            "manager": result.manager,
+            "bindings": result.bindings,
+            "count": result.count,
+            "collectible_count": result.collectible_count,
+            "checkpoint_count": result.checkpoint_count,
+            "interaction_count": result.interaction_count,
+            "objective_count": result.objective_count,
             "elapsed_ms": elapsed_ms
         }),
     }
@@ -2958,6 +3102,62 @@ impl GameObjectiveStepArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct GameplayCreateSystemArgs {
+    name: String,
+    scene: Option<String>,
+    group: Option<String>,
+    #[serde(default = "default_gameplay_runtime_location")]
+    location: [f64; 3],
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+impl GameplayCreateSystemArgs {
+    fn into_spec(self) -> GameplayCreateSystemSpec {
+        GameplayCreateSystemSpec {
+            name: self.name,
+            scene: self.scene,
+            group: self.group,
+            location: self.location,
+            tags: self.tags,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GameplayBindArgs {
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default = "default_gameplay_manager_name")]
+    manager_name: String,
+    #[serde(default = "default_true")]
+    include_generated: bool,
+    #[serde(default = "default_game_collectible_value")]
+    value: i32,
+    #[serde(default = "default_true")]
+    destroy_on_collect: bool,
+}
+
+impl GameplayBindArgs {
+    fn into_spec(self, default_tag: &str) -> GameplayBindSpec {
+        let mut tags = self.tags;
+        if self.names.is_empty() && tags.is_empty() {
+            tags.push(default_tag.to_string());
+        }
+        GameplayBindSpec {
+            names: self.names,
+            tags,
+            manager_name: self.manager_name,
+            include_generated: self.include_generated,
+            value: self.value,
+            destroy_on_collect: self.destroy_on_collect,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct ScalarParameterArg {
     name: String,
     value: f64,
@@ -3303,4 +3503,12 @@ fn default_game_objective_kind() -> String {
 
 fn default_game_objective_scale() -> [f64; 3] {
     [1.0, 1.0, 1.0]
+}
+
+fn default_gameplay_runtime_location() -> [f64; 3] {
+    [0.0, 0.0, 100.0]
+}
+
+fn default_gameplay_manager_name() -> String {
+    "MCP_GameplayManager".to_string()
 }
