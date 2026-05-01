@@ -179,6 +179,21 @@ pub enum Command {
         blueprint: Option<String>,
         animations: Vec<String>,
     },
+    GameCreatePlayer {
+        spec: GamePlayerSpec,
+    },
+    GameCreateCheckpoint {
+        spec: GameCheckpointSpec,
+    },
+    GameCreateInteraction {
+        spec: GameInteractionSpec,
+    },
+    GameCreateCollectibles {
+        spec: GameCollectiblesSpec,
+    },
+    GameCreateObjectiveFlow {
+        spec: GameObjectiveFlowSpec,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -358,6 +373,81 @@ pub struct RuntimeAnimationSpec {
     pub axis: [f64; 3],
     pub base_intensity: f64,
     pub phase_offset: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GamePlayerSpec {
+    pub name: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub location: [f64; 3],
+    pub rotation: [f64; 3],
+    pub spawn_tag: Option<String>,
+    pub create_camera: bool,
+    pub camera_name: Option<String>,
+    pub camera_location: [f64; 3],
+    pub camera_rotation: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameCheckpointSpec {
+    pub name: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub checkpoint_id: String,
+    pub order: u32,
+    pub location: [f64; 3],
+    pub rotation: [f64; 3],
+    pub scale: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameInteractionSpec {
+    pub name: String,
+    pub kind: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub interaction_id: Option<String>,
+    pub target: Option<String>,
+    pub action: Option<String>,
+    pub prompt: Option<String>,
+    pub location: [f64; 3],
+    pub rotation: [f64; 3],
+    pub scale: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameCollectiblesSpec {
+    pub name_prefix: String,
+    pub mesh: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub origin: [f64; 3],
+    pub rows: u32,
+    pub columns: u32,
+    pub spacing: [f64; 2],
+    pub value: i32,
+    pub rotation: [f64; 3],
+    pub scale: [f64; 3],
+    pub animation: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameObjectiveStepSpec {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub location: [f64; 3],
+    pub rotation: [f64; 3],
+    pub scale: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameObjectiveFlowSpec {
+    pub name_prefix: String,
+    pub scene: Option<String>,
+    pub group: Option<String>,
+    pub steps: Vec<GameObjectiveStepSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -588,6 +678,17 @@ pub struct SceneAssemblyResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameplayOperationResult {
+    pub spawned: Vec<SpawnedActor>,
+    pub count: usize,
+    pub player_count: usize,
+    pub checkpoint_count: usize,
+    pub interaction_count: usize,
+    pub collectible_count: usize,
+    pub objective_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaterialOperation {
     pub path: String,
     pub parent: Option<String>,
@@ -726,4 +827,5 @@ pub enum CommandResult {
     BlueprintOperation(BlueprintOperation),
     BlueprintComponentOperation(BlueprintComponentOperation),
     RuntimeAnimationOperation(RuntimeAnimationOperation),
+    GameplayOperation(GameplayOperationResult),
 }

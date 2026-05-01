@@ -2,15 +2,17 @@ use unreal_mcp_protocol::{
     ActorQuery, ActorSpawnSpec, AssetImportItem, AssetImportOperation, AssetImportResult,
     AssetImportSpec, AssetOperation, AssetValidateSpec, AssetValidation, AssetValidationResult,
     BlueprintComponentOperation, BlueprintOperation, CityBlockSpec, Command, CommandResult,
-    DistrictSpec, ErrorMode, GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec,
-    GridPlacementSpec, IndexedError, LandscapeCreateSpec, LandscapeHeightPatch,
-    LandscapeLayerPaint, LandscapeOperation, LevelInfo, LevelList, LevelOperation,
-    LightComponentSpec, LightSpec, LightSummary, LightingOperation, MaterialAppliedActor,
-    MaterialApplyResult, MaterialAssignment, MaterialOperation, MaterialParameter,
-    MaterialParameterOperation, PlacementSnapActor, PlacementSnapResult, PlacementSnapSpec,
-    ProceduralTextureOperation, ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode,
-    RoadNetworkSpec, RuntimeAnimationOperation, RuntimeAnimationSpec, SceneAssemblyResult,
-    SpawnedActor, StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation,
+    DistrictSpec, ErrorMode, GameCheckpointSpec, GameCollectiblesSpec, GameInteractionSpec,
+    GameObjectiveFlowSpec, GameObjectiveStepSpec, GamePlayerSpec, GameplayOperationResult,
+    GeneratedBuildingSpec, GeneratedMeshOperation, GeneratedSignSpec, GridPlacementSpec,
+    IndexedError, LandscapeCreateSpec, LandscapeHeightPatch, LandscapeLayerPaint,
+    LandscapeOperation, LevelInfo, LevelList, LevelOperation, LightComponentSpec, LightSpec,
+    LightSummary, LightingOperation, MaterialAppliedActor, MaterialApplyResult,
+    MaterialAssignment, MaterialOperation, MaterialParameter, MaterialParameterOperation,
+    PlacementSnapActor, PlacementSnapResult, PlacementSnapSpec, ProceduralTextureOperation,
+    ProtocolError, RequestEnvelope, ResponseEnvelope, ResponseMode, RoadNetworkSpec,
+    RuntimeAnimationOperation, RuntimeAnimationSpec, SceneAssemblyResult, SpawnedActor,
+    StaticMeshCollisionSpec, StaticMeshComponentSpec, StaticMeshOperation,
     StaticMeshOperationResult, TextureCreateSpec, Transform, WorldQueryResult,
 };
 
@@ -868,6 +870,135 @@ fn scene_assembly_results_roundtrip_preserve_payloads() {
             sidewalk_count: 0,
             building_count: 1,
             prop_count: 0,
+        })],
+    );
+
+    let bytes = encode_msgpack_response(&response).expect("encode response");
+    let decoded = decode_msgpack_response(&bytes).expect("decode response");
+
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn gameplay_requests_roundtrip_preserve_payloads() {
+    let request = RequestEnvelope::new(
+        68,
+        ResponseMode::Summary,
+        ErrorMode::Continue,
+        vec![
+            Command::GameCreatePlayer {
+                spec: GamePlayerSpec {
+                    name: "MCP_PlayerStart".to_string(),
+                    scene: Some("prototype".to_string()),
+                    group: Some("gameplay".to_string()),
+                    location: [0.0, 0.0, 120.0],
+                    rotation: [0.0, 90.0, 0.0],
+                    spawn_tag: Some("default".to_string()),
+                    create_camera: true,
+                    camera_name: Some("MCP_PlayerCamera".to_string()),
+                    camera_location: [-400.0, 0.0, 260.0],
+                    camera_rotation: [-10.0, 0.0, 0.0],
+                },
+            },
+            Command::GameCreateCheckpoint {
+                spec: GameCheckpointSpec {
+                    name: "MCP_Checkpoint_A".to_string(),
+                    scene: Some("prototype".to_string()),
+                    group: Some("checkpoints".to_string()),
+                    checkpoint_id: "cp_a".to_string(),
+                    order: 1,
+                    location: [1000.0, 0.0, 80.0],
+                    rotation: [0.0, 0.0, 0.0],
+                    scale: [2.0, 2.0, 0.25],
+                },
+            },
+            Command::GameCreateInteraction {
+                spec: GameInteractionSpec {
+                    name: "MCP_DoorSwitch".to_string(),
+                    kind: "button".to_string(),
+                    scene: Some("prototype".to_string()),
+                    group: Some("interactions".to_string()),
+                    interaction_id: Some("door_switch".to_string()),
+                    target: Some("MCP_Door_A".to_string()),
+                    action: Some("open".to_string()),
+                    prompt: Some("Open".to_string()),
+                    location: [500.0, 300.0, 120.0],
+                    rotation: [0.0, 0.0, 0.0],
+                    scale: [0.5, 0.5, 0.5],
+                },
+            },
+            Command::GameCreateCollectibles {
+                spec: GameCollectiblesSpec {
+                    name_prefix: "MCP_Coin".to_string(),
+                    mesh: "/Engine/BasicShapes/Cube.Cube".to_string(),
+                    scene: Some("prototype".to_string()),
+                    group: Some("collectibles".to_string()),
+                    origin: [0.0, 1000.0, 120.0],
+                    rows: 2,
+                    columns: 3,
+                    spacing: [180.0, 160.0],
+                    value: 10,
+                    rotation: [0.0, 0.0, 45.0],
+                    scale: [0.2, 0.2, 0.2],
+                    animation: Some("/Game/MCP/Runtime/DA_CoinBob".to_string()),
+                },
+            },
+            Command::GameCreateObjectiveFlow {
+                spec: GameObjectiveFlowSpec {
+                    name_prefix: "MCP_Objective".to_string(),
+                    scene: Some("prototype".to_string()),
+                    group: Some("objectives".to_string()),
+                    steps: vec![
+                        GameObjectiveStepSpec {
+                            id: "intro".to_string(),
+                            label: "Reach the street".to_string(),
+                            kind: "location".to_string(),
+                            location: [0.0, 0.0, 100.0],
+                            rotation: [0.0, 0.0, 0.0],
+                            scale: [1.0, 1.0, 1.0],
+                        },
+                        GameObjectiveStepSpec {
+                            id: "exit".to_string(),
+                            label: "Find the exit".to_string(),
+                            kind: "interaction".to_string(),
+                            location: [1200.0, 0.0, 100.0],
+                            rotation: [0.0, 0.0, 0.0],
+                            scale: [1.0, 1.0, 1.0],
+                        },
+                    ],
+                },
+            },
+        ],
+    );
+
+    let text = encode_json_request(&request).expect("encode request");
+    let decoded = decode_json_request(&text).expect("decode request");
+
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn gameplay_results_roundtrip_preserve_payloads() {
+    let response = ResponseEnvelope::success(
+        69,
+        8,
+        vec![CommandResult::GameplayOperation(GameplayOperationResult {
+            spawned: vec![
+                SpawnedActor {
+                    name: "MCP_PlayerStart".to_string(),
+                    path: "PersistentLevel.MCP_PlayerStart".to_string(),
+                },
+                SpawnedActor {
+                    name: "MCP_Coin_0_0".to_string(),
+                    path: "PersistentLevel.MCP_Coin_0_0".to_string(),
+                },
+            ],
+            count: 2,
+            player_count: 1,
+            checkpoint_count: 0,
+            interaction_count: 0,
+            collectible_count: 1,
+            objective_count: 0,
         })],
     );
 
