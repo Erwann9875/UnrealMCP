@@ -755,6 +755,117 @@ ticks during Play-in-Editor.
 }
 ```
 
+## `game.create_player`
+
+Creates an editor `PlayerStart` plus an optional camera marker. Actors are
+tagged with `mcp.generated`, `mcp.gameplay`, and `mcp.gameplay_actor:*`.
+
+```json
+{
+  "name": "MCP_PlayerStart",
+  "scene": "prototype",
+  "group": "gameplay",
+  "location": [0.0, 0.0, 120.0],
+  "rotation": [0.0, 90.0, 0.0],
+  "spawn_tag": "default",
+  "create_camera": true
+}
+```
+
+## `game.create_checkpoint`
+
+Creates a visible checkpoint marker using the default cube mesh and tags it
+with checkpoint id and order metadata.
+
+```json
+{
+  "name": "MCP_Checkpoint_A",
+  "checkpoint_id": "cp_a",
+  "order": 1,
+  "location": [1000.0, 0.0, 80.0],
+  "scale": [2.0, 2.0, 0.25]
+}
+```
+
+## `game.create_interaction`
+
+Creates a visible interaction marker with kind, optional target/action/prompt
+metadata, and selection-friendly gameplay tags.
+
+```json
+{
+  "name": "MCP_DoorSwitch",
+  "kind": "button",
+  "interaction_id": "door_switch",
+  "target": "MCP_Door_A",
+  "action": "open",
+  "prompt": "Open",
+  "location": [500.0, 300.0, 120.0]
+}
+```
+
+## `game.create_collectibles`
+
+Creates many collectible markers in one bridge request. The mesh can be any
+loaded static mesh asset path.
+
+```json
+{
+  "name_prefix": "MCP_Coin",
+  "mesh": "/Engine/BasicShapes/Cube.Cube",
+  "scene": "prototype",
+  "rows": 2,
+  "columns": 3,
+  "spacing": [180.0, 160.0],
+  "value": 10,
+  "animation": "/Game/MCP/Runtime/DA_CoinBob"
+}
+```
+
+## `game.create_objective_flow`
+
+Creates ordered objective markers from compact step data.
+
+```json
+{
+  "name_prefix": "MCP_Objective",
+  "steps": [
+    {
+      "id": "intro",
+      "label": "Reach the street",
+      "kind": "location",
+      "location": [0.0, 0.0, 100.0]
+    },
+    {
+      "id": "exit",
+      "label": "Find the exit",
+      "kind": "interaction",
+      "location": [1200.0, 0.0, 100.0]
+    }
+  ]
+}
+```
+
+Gameplay tools return the compact `gameplay_operation` data shape:
+
+```json
+{
+  "count": 1,
+  "player_count": 0,
+  "checkpoint_count": 1,
+  "interaction_count": 0,
+  "collectible_count": 0,
+  "objective_count": 0,
+  "spawned": [
+    {
+      "name": "MCP_Checkpoint_A",
+      "path": "PersistentLevel.MCP_Checkpoint_A"
+    }
+  ],
+  "elapsed_ms": 1
+}
+```
+
 ## MCP Methods
 
 The stdio server currently handles:
