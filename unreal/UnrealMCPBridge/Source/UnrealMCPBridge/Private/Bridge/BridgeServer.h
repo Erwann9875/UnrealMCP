@@ -26,6 +26,16 @@ private:
     bool ReadExact(FSocket& ClientSocket, uint8* Destination, int32 BytesToRead) const;
     bool WriteExact(FSocket& ClientSocket, const uint8* Source, int32 BytesToWrite) const;
     bool BuildResponse(const FString& RequestJson, FString& OutResponseJson) const;
+    TSharedPtr<FJsonObject> ExecuteCommandOnGameThread(
+        const FString& CommandType,
+        const TSharedPtr<FJsonObject>& CommandObject,
+        int32 CommandIndex,
+        TSharedPtr<FJsonObject>& OutError) const;
+    TSharedPtr<FJsonObject> ExecuteCommand(
+        const FString& CommandType,
+        const TSharedPtr<FJsonObject>& CommandObject,
+        int32 CommandIndex,
+        TSharedPtr<FJsonObject>& OutError) const;
     TSharedRef<FJsonObject> BuildSuccessResponse(
         uint64 RequestId,
         uint32 ElapsedMs,

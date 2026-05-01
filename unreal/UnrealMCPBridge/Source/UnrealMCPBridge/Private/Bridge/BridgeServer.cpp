@@ -1,15 +1,29 @@
 #include "Bridge/BridgeServer.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Async/Async.h"
 #include "Common/TcpListener.h"
+#include "Components/StaticMeshComponent.h"
 #include "Containers/StringConv.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Editor.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
+#include "FileHelpers.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Misc/EngineVersion.h"
+#include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
+#include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "SocketSubsystem.h"
 #include "Sockets.h"
+#include "ScopedTransaction.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealMCPBridgeServer, Log, All);
 
@@ -52,6 +66,205 @@ TSharedPtr<FJsonValue> MakeStringValue(const FString& Value)
 TSharedPtr<FJsonValue> MakeObjectValue(const TSharedRef<FJsonObject>& Value)
 {
     return MakeShared<FJsonValueObject>(Value);
+}
+
+TSharedPtr<FJsonValue> MakeNumberValue(double Value)
+{
+    return MakeShared<FJsonValueNumber>(Value);
+}
+
+TSharedRef<FJsonObject> MakeTaggedResult(const FString& Type, const TSharedRef<FJsonObject>& Data)
+{
+    TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("type"), Type);
+    Result->SetObjectField(TEXT("data"), Data);
+    return Result;
+}
+
+TArray<TSharedPtr<FJsonValue>> MakeVectorArray(double X, double Y, double Z)
+{
+    return {
+        MakeNumberValue(X),
+        MakeNumberValue(Y),
+        MakeNumberValue(Z),
+    };
+}
+
+bool ReadVectorField(
+    const TSharedPtr<FJsonObject>& Object,
+    const FString& FieldName,
+    const FVector& DefaultValue,
+    FVector& OutValue)
+{
+    OutValue = DefaultValue;
+    if (!Object.IsValid())
+    {
+        return false;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+    if (!Object->TryGetArrayField(FieldName, Values))
+    {
+        return true;
+    }
+
+    if (Values->Num() != 3)
+    {
+        return false;
+    }
+
+    OutValue = FVector(
+        (*Values)[0]->AsNumber(),
+        (*Values)[1]->AsNumber(),
+        (*Values)[2]->AsNumber());
+    return true;
+}
+
+bool ReadRotatorField(
+    const TSharedPtr<FJsonObject>& Object,
+    const FString& FieldName,
+    const FRotator& DefaultValue,
+    FRotator& OutValue)
+{
+    FVector RotationVector;
+    if (!ReadVectorField(Object, FieldName, FVector(DefaultValue.Pitch, DefaultValue.Yaw, DefaultValue.Roll), RotationVector))
+    {
+        return false;
+    }
+
+    OutValue = FRotator(RotationVector.X, RotationVector.Y, RotationVector.Z);
+    return true;
+}
+
+TArray<FString> ReadStringArrayField(const TSharedPtr<FJsonObject>& Object, const FString& FieldName)
+{
+    TArray<FString> Strings;
+    if (!Object.IsValid())
+    {
+        return Strings;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+    if (!Object->TryGetArrayField(FieldName, Values))
+    {
+        return Strings;
+    }
+
+    for (const TSharedPtr<FJsonValue>& Value : *Values)
+    {
+        if (Value.IsValid())
+        {
+            Strings.Add(Value->AsString());
+        }
+    }
+
+    return Strings;
+}
+
+bool TryGetCommandData(const TSharedPtr<FJsonObject>& CommandObject, TSharedPtr<FJsonObject>& OutData)
+{
+    const TSharedPtr<FJsonObject>* Data = nullptr;
+    if (CommandObject.IsValid() && CommandObject->TryGetObjectField(TEXT("data"), Data) && Data != nullptr)
+    {
+        OutData = *Data;
+        return OutData.IsValid();
+    }
+
+    OutData = MakeShared<FJsonObject>();
+    return true;
+}
+
+UWorld* GetEditorWorld()
+{
+    return GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+}
+
+bool ActorMatches(const AActor& Actor, const TArray<FString>& Names, const TArray<FString>& Tags)
+{
+    bool bMatchesName = Names.IsEmpty();
+    for (const FString& Name : Names)
+    {
+        if (Actor.GetName() == Name || Actor.GetActorLabel() == Name)
+        {
+            bMatchesName = true;
+            break;
+        }
+    }
+
+    bool bMatchesTag = Tags.IsEmpty();
+    for (const FString& Tag : Tags)
+    {
+        if (Actor.ActorHasTag(FName(*Tag)))
+        {
+            bMatchesTag = true;
+            break;
+        }
+    }
+
+    return bMatchesName && bMatchesTag;
+}
+
+TSharedRef<FJsonObject> ActorToJson(const AActor& Actor)
+{
+    const FVector Location = Actor.GetActorLocation();
+    const FRotator Rotation = Actor.GetActorRotation();
+    const FVector Scale = Actor.GetActorScale3D();
+
+    TArray<TSharedPtr<FJsonValue>> Tags;
+    for (const FName& Tag : Actor.Tags)
+    {
+        Tags.Add(MakeStringValue(Tag.ToString()));
+    }
+
+    TSharedRef<FJsonObject> Transform = MakeShared<FJsonObject>();
+    Transform->SetArrayField(TEXT("location"), MakeVectorArray(Location.X, Location.Y, Location.Z));
+    Transform->SetArrayField(TEXT("rotation"), MakeVectorArray(Rotation.Pitch, Rotation.Yaw, Rotation.Roll));
+    Transform->SetArrayField(TEXT("scale"), MakeVectorArray(Scale.X, Scale.Y, Scale.Z));
+
+    TSharedRef<FJsonObject> ActorJson = MakeShared<FJsonObject>();
+    ActorJson->SetStringField(TEXT("name"), Actor.GetActorLabel());
+    ActorJson->SetStringField(TEXT("path"), Actor.GetPathName());
+    ActorJson->SetStringField(TEXT("class_name"), Actor.GetClass()->GetName());
+    ActorJson->SetObjectField(TEXT("transform"), Transform);
+    ActorJson->SetArrayField(TEXT("tags"), Tags);
+    return ActorJson;
+}
+
+TSharedRef<FJsonObject> QueryWorldActors(
+    UWorld& World,
+    const TArray<FString>& Names,
+    TArray<FString> Tags,
+    bool bIncludeGenerated,
+    int32 Limit)
+{
+    if (bIncludeGenerated && Tags.IsEmpty())
+    {
+        Tags.Add(TEXT("mcp.generated"));
+    }
+
+    TArray<TSharedPtr<FJsonValue>> Actors;
+    int32 TotalCount = 0;
+    const int32 EffectiveLimit = Limit > 0 ? Limit : 500;
+
+    for (TActorIterator<AActor> It(&World); It; ++It)
+    {
+        AActor* Actor = *It;
+        if (!IsValid(Actor) || !ActorMatches(*Actor, Names, Tags))
+        {
+            continue;
+        }
+
+        ++TotalCount;
+        if (Actors.Num() < EffectiveLimit)
+        {
+            Actors.Add(MakeObjectValue(ActorToJson(*Actor)));
+        }
+    }
+
+    TSharedRef<FJsonObject> Query = MakeShared<FJsonObject>();
+    Query->SetArrayField(TEXT("actors"), Actors);
+    Query->SetNumberField(TEXT("total_count"), TotalCount);
+    return Query;
 }
 }
 
@@ -314,49 +527,24 @@ bool FBridgeServer::BuildResponse(const FString& RequestJson, FString& OutRespon
             continue;
         }
 
-        if (CommandType == TEXT("ping"))
+        TSharedPtr<FJsonObject> CommandError;
+        TSharedPtr<FJsonObject> CommandResult =
+            ExecuteCommandOnGameThread(CommandType, *CommandObject, CommandIndex, CommandError);
+        if (CommandResult.IsValid())
         {
-            TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
-            Data->SetStringField(TEXT("bridge_version"), BridgeVersion);
-
-            TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-            Result->SetStringField(TEXT("type"), TEXT("pong"));
-            Result->SetObjectField(TEXT("data"), Data);
-            Results.Add(MakeObjectValue(Result));
-        }
-        else if (CommandType == TEXT("status"))
-        {
-            TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
-            Data->SetBoolField(TEXT("connected"), bRunning.load(std::memory_order_acquire));
-            Data->SetStringField(TEXT("bridge_version"), BridgeVersion);
-            Data->SetStringField(TEXT("unreal_version"), FEngineVersion::Current().ToString());
-
-            TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-            Result->SetStringField(TEXT("type"), TEXT("status"));
-            Result->SetObjectField(TEXT("data"), Data);
-            Results.Add(MakeObjectValue(Result));
-        }
-        else if (CommandType == TEXT("capabilities"))
-        {
-            TArray<TSharedPtr<FJsonValue>> CommandNames;
-            CommandNames.Add(MakeStringValue(TEXT("connection.ping")));
-            CommandNames.Add(MakeStringValue(TEXT("connection.status")));
-            CommandNames.Add(MakeStringValue(TEXT("connection.capabilities")));
-
-            TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
-            Data->SetArrayField(TEXT("commands"), CommandNames);
-
-            TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-            Result->SetStringField(TEXT("type"), TEXT("capabilities"));
-            Result->SetObjectField(TEXT("data"), Data);
-            Results.Add(MakeObjectValue(Result));
+            Results.Add(MakeObjectValue(CommandResult.ToSharedRef()));
         }
         else
         {
-            Errors.Add(MakeObjectValue(BuildError(
-                CommandIndex,
-                TEXT("unknown_command"),
-                FString::Printf(TEXT("unknown command type '%s'"), *CommandType))));
+            if (!CommandError.IsValid())
+            {
+                CommandError = BuildError(
+                    CommandIndex,
+                    TEXT("unknown_command"),
+                    FString::Printf(TEXT("unknown command type '%s'"), *CommandType));
+            }
+
+            Errors.Add(MakeObjectValue(CommandError.ToSharedRef()));
             if (!bContinueOnError)
             {
                 break;
@@ -370,6 +558,366 @@ bool FBridgeServer::BuildResponse(const FString& RequestJson, FString& OutRespon
     }
 
     return SerializeJsonObject(BuildSuccessResponse(RequestId, ElapsedMs(), Results), OutResponseJson);
+}
+
+TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommandOnGameThread(
+    const FString& CommandType,
+    const TSharedPtr<FJsonObject>& CommandObject,
+    int32 CommandIndex,
+    TSharedPtr<FJsonObject>& OutError) const
+{
+    if (IsInGameThread())
+    {
+        return ExecuteCommand(CommandType, CommandObject, CommandIndex, OutError);
+    }
+
+    TSharedPtr<FJsonObject> Result;
+    FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
+    AsyncTask(ENamedThreads::GameThread, [this, CommandType, CommandObject, CommandIndex, &Result, &OutError, DoneEvent]() {
+        Result = ExecuteCommand(CommandType, CommandObject, CommandIndex, OutError);
+        DoneEvent->Trigger();
+    });
+    DoneEvent->Wait();
+    FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FBridgeServer::ExecuteCommand(
+    const FString& CommandType,
+    const TSharedPtr<FJsonObject>& CommandObject,
+    int32 CommandIndex,
+    TSharedPtr<FJsonObject>& OutError) const
+{
+    TSharedPtr<FJsonObject> Data;
+    TryGetCommandData(CommandObject, Data);
+
+    if (CommandType == TEXT("ping"))
+    {
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetStringField(TEXT("bridge_version"), BridgeVersion);
+        return MakeTaggedResult(TEXT("pong"), ResultData);
+    }
+
+    if (CommandType == TEXT("status"))
+    {
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetBoolField(TEXT("connected"), bRunning.load(std::memory_order_acquire));
+        ResultData->SetStringField(TEXT("bridge_version"), BridgeVersion);
+        ResultData->SetStringField(TEXT("unreal_version"), FEngineVersion::Current().ToString());
+        return MakeTaggedResult(TEXT("status"), ResultData);
+    }
+
+    if (CommandType == TEXT("capabilities"))
+    {
+        TArray<TSharedPtr<FJsonValue>> CommandNames;
+        CommandNames.Add(MakeStringValue(TEXT("connection.ping")));
+        CommandNames.Add(MakeStringValue(TEXT("connection.status")));
+        CommandNames.Add(MakeStringValue(TEXT("connection.capabilities")));
+        CommandNames.Add(MakeStringValue(TEXT("level.create")));
+        CommandNames.Add(MakeStringValue(TEXT("level.open")));
+        CommandNames.Add(MakeStringValue(TEXT("level.save")));
+        CommandNames.Add(MakeStringValue(TEXT("level.list")));
+        CommandNames.Add(MakeStringValue(TEXT("world.bulk_spawn")));
+        CommandNames.Add(MakeStringValue(TEXT("world.bulk_delete")));
+        CommandNames.Add(MakeStringValue(TEXT("world.query")));
+        CommandNames.Add(MakeStringValue(TEXT("world.snapshot")));
+
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetArrayField(TEXT("commands"), CommandNames);
+        return MakeTaggedResult(TEXT("capabilities"), ResultData);
+    }
+
+    if (CommandType == TEXT("level_list"))
+    {
+        TArray<TSharedPtr<FJsonValue>> Levels;
+        FAssetRegistryModule& AssetRegistryModule =
+            FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+        TArray<FAssetData> Assets;
+        AssetRegistryModule.Get().GetAssetsByClass(UWorld::StaticClass()->GetClassPathName(), Assets);
+
+        for (const FAssetData& Asset : Assets)
+        {
+            TSharedRef<FJsonObject> Level = MakeShared<FJsonObject>();
+            Level->SetStringField(TEXT("path"), Asset.PackageName.ToString());
+            Level->SetStringField(TEXT("name"), Asset.AssetName.ToString());
+            Levels.Add(MakeObjectValue(Level));
+        }
+
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetArrayField(TEXT("levels"), Levels);
+        return MakeTaggedResult(TEXT("level_list"), ResultData);
+    }
+
+    if (CommandType == TEXT("level_create"))
+    {
+        FString Path;
+        const bool bHasPath = Data->TryGetStringField(TEXT("path"), Path);
+        if (!bHasPath || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("level.create requires data.path"));
+            return nullptr;
+        }
+
+        bool bOpen = true;
+        bool bSave = false;
+        Data->TryGetBoolField(TEXT("open"), bOpen);
+        Data->TryGetBoolField(TEXT("save"), bSave);
+
+        UWorld* World = UEditorLoadingAndSavingUtils::NewBlankMap(false);
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("failed to create blank map"));
+            return nullptr;
+        }
+
+        const bool bSaved = bSave ? UEditorLoadingAndSavingUtils::SaveMap(World, Path) : false;
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetStringField(TEXT("path"), Path);
+        ResultData->SetBoolField(TEXT("opened"), bOpen);
+        ResultData->SetBoolField(TEXT("saved"), bSaved);
+        return MakeTaggedResult(TEXT("level_operation"), ResultData);
+    }
+
+    if (CommandType == TEXT("level_open"))
+    {
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("level.open requires data.path"));
+            return nullptr;
+        }
+
+        UWorld* World = UEditorLoadingAndSavingUtils::LoadMap(Path);
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to open level '%s'"), *Path));
+            return nullptr;
+        }
+
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetStringField(TEXT("path"), Path);
+        ResultData->SetBoolField(TEXT("opened"), true);
+        ResultData->SetBoolField(TEXT("saved"), false);
+        return MakeTaggedResult(TEXT("level_operation"), ResultData);
+    }
+
+    if (CommandType == TEXT("level_save"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            Path = World->GetOutermost()->GetName();
+        }
+
+        const bool bSaved = UEditorLoadingAndSavingUtils::SaveMap(World, Path);
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetStringField(TEXT("path"), Path);
+        ResultData->SetBoolField(TEXT("opened"), true);
+        ResultData->SetBoolField(TEXT("saved"), bSaved);
+        return MakeTaggedResult(TEXT("level_operation"), ResultData);
+    }
+
+    if (CommandType == TEXT("world_bulk_spawn"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        const TArray<TSharedPtr<FJsonValue>>* Actors = nullptr;
+        if (!Data->TryGetArrayField(TEXT("actors"), Actors))
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("world.bulk_spawn requires data.actors"));
+            return nullptr;
+        }
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "BulkSpawnActors", "MCP Bulk Spawn Actors"));
+        TArray<TSharedPtr<FJsonValue>> Spawned;
+        for (const TSharedPtr<FJsonValue>& ActorValue : *Actors)
+        {
+            const TSharedPtr<FJsonObject>* ActorSpec = nullptr;
+            if (!ActorValue.IsValid() || !ActorValue->TryGetObject(ActorSpec) || ActorSpec == nullptr || !ActorSpec->IsValid())
+            {
+                continue;
+            }
+
+            FString Name;
+            FString MeshPath;
+            (*ActorSpec)->TryGetStringField(TEXT("name"), Name);
+            (*ActorSpec)->TryGetStringField(TEXT("mesh"), MeshPath);
+            if (Name.IsEmpty() || MeshPath.IsEmpty())
+            {
+                continue;
+            }
+
+            FVector Location = FVector::ZeroVector;
+            FVector Scale = FVector(1.0, 1.0, 1.0);
+            FRotator Rotation = FRotator::ZeroRotator;
+            if (!ReadVectorField(*ActorSpec, TEXT("location"), FVector::ZeroVector, Location) ||
+                !ReadRotatorField(*ActorSpec, TEXT("rotation"), FRotator::ZeroRotator, Rotation) ||
+                !ReadVectorField(*ActorSpec, TEXT("scale"), FVector(1.0, 1.0, 1.0), Scale))
+            {
+                continue;
+            }
+
+            UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
+            if (!Mesh)
+            {
+                continue;
+            }
+
+            FActorSpawnParameters SpawnParameters;
+            SpawnParameters.Name = MakeUniqueObjectName(World, AStaticMeshActor::StaticClass(), FName(*Name));
+            AStaticMeshActor* Actor = World->SpawnActor<AStaticMeshActor>(Location, Rotation, SpawnParameters);
+            if (!Actor)
+            {
+                continue;
+            }
+
+            Actor->Modify();
+            Actor->SetActorLabel(Name);
+            Actor->SetActorScale3D(Scale);
+            Actor->Tags.AddUnique(TEXT("mcp.generated"));
+
+            FString Scene;
+            if ((*ActorSpec)->TryGetStringField(TEXT("scene"), Scene) && !Scene.IsEmpty())
+            {
+                Actor->Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.scene:%s"), *Scene)));
+            }
+
+            FString Group;
+            if ((*ActorSpec)->TryGetStringField(TEXT("group"), Group) && !Group.IsEmpty())
+            {
+                Actor->Tags.AddUnique(FName(*FString::Printf(TEXT("mcp.group:%s"), *Group)));
+            }
+
+            UStaticMeshComponent* MeshComponent = Actor->GetStaticMeshComponent();
+            if (MeshComponent)
+            {
+                MeshComponent->SetStaticMesh(Mesh);
+                MeshComponent->SetMobility(EComponentMobility::Static);
+            }
+
+            TSharedRef<FJsonObject> SpawnedActor = MakeShared<FJsonObject>();
+            SpawnedActor->SetStringField(TEXT("name"), Actor->GetActorLabel());
+            SpawnedActor->SetStringField(TEXT("path"), Actor->GetPathName());
+            Spawned.Add(MakeObjectValue(SpawnedActor));
+        }
+
+        World->MarkPackageDirty();
+
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetArrayField(TEXT("spawned"), Spawned);
+        ResultData->SetNumberField(TEXT("count"), Spawned.Num());
+        return MakeTaggedResult(TEXT("world_bulk_spawn"), ResultData);
+    }
+
+    if (CommandType == TEXT("world_bulk_delete"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        const TArray<FString> Names = ReadStringArrayField(Data, TEXT("names"));
+        const TArray<FString> Tags = ReadStringArrayField(Data, TEXT("tags"));
+        if (Names.IsEmpty() && Tags.IsEmpty())
+        {
+            OutError = BuildError(CommandIndex, TEXT("invalid_payload"), TEXT("world.bulk_delete requires names or tags"));
+            return nullptr;
+        }
+
+        TArray<AActor*> ActorsToDelete;
+        for (TActorIterator<AActor> It(World); It; ++It)
+        {
+            AActor* Actor = *It;
+            if (IsValid(Actor) && ActorMatches(*Actor, Names, Tags))
+            {
+                ActorsToDelete.Add(Actor);
+            }
+        }
+
+        FScopedTransaction Transaction(NSLOCTEXT("UnrealMCPBridge", "BulkDeleteActors", "MCP Bulk Delete Actors"));
+        TArray<TSharedPtr<FJsonValue>> Deleted;
+        for (AActor* Actor : ActorsToDelete)
+        {
+            Deleted.Add(MakeStringValue(Actor->GetActorLabel()));
+            World->EditorDestroyActor(Actor, true);
+        }
+
+        World->MarkPackageDirty();
+
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetArrayField(TEXT("deleted"), Deleted);
+        ResultData->SetNumberField(TEXT("count"), Deleted.Num());
+        return MakeTaggedResult(TEXT("world_bulk_delete"), ResultData);
+    }
+
+    if (CommandType == TEXT("world_query"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        TArray<FString> Names = ReadStringArrayField(Data, TEXT("names"));
+        TArray<FString> Tags = ReadStringArrayField(Data, TEXT("tags"));
+        bool bIncludeGenerated = false;
+        Data->TryGetBoolField(TEXT("include_generated"), bIncludeGenerated);
+        int32 Limit = 500;
+        Data->TryGetNumberField(TEXT("limit"), Limit);
+        return MakeTaggedResult(TEXT("world_query"), QueryWorldActors(*World, Names, Tags, bIncludeGenerated, Limit));
+    }
+
+    if (CommandType == TEXT("world_snapshot"))
+    {
+        UWorld* World = GetEditorWorld();
+        if (!World)
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), TEXT("no editor world is loaded"));
+            return nullptr;
+        }
+
+        TArray<FString> Tags = ReadStringArrayField(Data, TEXT("tags"));
+        TSharedRef<FJsonObject> Query = QueryWorldActors(*World, TArray<FString>(), Tags, Tags.IsEmpty(), 100000);
+
+        FString Path;
+        if (!Data->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+        {
+            Path = FPaths::ProjectSavedDir() / TEXT("UnrealMCP/snapshots/world_snapshot.json");
+        }
+
+        FString SnapshotJson;
+        SerializeJsonObject(Query, SnapshotJson);
+        IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), true);
+        if (!FFileHelper::SaveStringToFile(SnapshotJson, *Path))
+        {
+            OutError = BuildError(CommandIndex, TEXT("unreal_api_failure"), FString::Printf(TEXT("failed to write snapshot '%s'"), *Path));
+            return nullptr;
+        }
+
+        int32 TotalCount = 0;
+        Query->TryGetNumberField(TEXT("total_count"), TotalCount);
+        TSharedRef<FJsonObject> ResultData = MakeShared<FJsonObject>();
+        ResultData->SetStringField(TEXT("path"), Path);
+        ResultData->SetNumberField(TEXT("total_count"), TotalCount);
+        return MakeTaggedResult(TEXT("world_snapshot"), ResultData);
+    }
+
+    return nullptr;
 }
 
 TSharedRef<FJsonObject> FBridgeServer::BuildSuccessResponse(
