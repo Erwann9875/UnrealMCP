@@ -16,6 +16,9 @@ public class UnrealMCPBridge : ModuleRules
         PrivateDependencyModuleNames.AddRange(new[]
         {
             "EditorSubsystem",
+            "Json",
+            "JsonUtilities",
+            "Networking",
             "Projects",
             "Sockets",
             "UnrealEd"
