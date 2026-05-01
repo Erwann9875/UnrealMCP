@@ -255,6 +255,105 @@ tags.
 }
 ```
 
+## `lighting.set_night_scene`
+
+Configures a reusable night preset: one active moon directional light, sky
+light, sky atmosphere, fog, and unbound post-process exposure. Other
+directional lights are hidden and set to intensity `0` to avoid forward-shading
+priority warnings.
+
+```json
+{
+  "moon_rotation": [-35.0, -25.0, 0.0],
+  "moon_intensity": 0.12,
+  "moon_color": [0.55, 0.65, 1.0, 1.0],
+  "sky_intensity": 0.05,
+  "fog_density": 0.01,
+  "exposure_compensation": -0.5
+}
+```
+
+## `lighting.set_sky`
+
+Creates or updates `MCP_SkyLight` and `MCP_SkyAtmosphere`.
+
+```json
+{
+  "sky_intensity": 0.05,
+  "lower_hemisphere_color": [0.01, 0.012, 0.018, 1.0]
+}
+```
+
+## `lighting.set_fog`
+
+Creates or updates `MCP_NightFog`.
+
+```json
+{
+  "density": 0.01,
+  "height_falloff": 0.2,
+  "color": [0.08, 0.1, 0.16, 1.0],
+  "start_distance": 0.0
+}
+```
+
+## `lighting.set_post_process`
+
+Creates or updates an unbound `MCP_PostProcess` volume for exposure and bloom.
+
+```json
+{
+  "exposure_compensation": -0.5,
+  "min_brightness": 0.2,
+  "max_brightness": 1.0,
+  "bloom_intensity": 0.6
+}
+```
+
+## `lighting.bulk_set_lights`
+
+Creates or updates point, rect, and spot lights in one request. Each light is
+tagged with `mcp.generated` and `mcp.lighting`, plus optional custom tags.
+
+```json
+{
+  "lights": [
+    {
+      "name": "MCP_StreetLight_001",
+      "kind": "point",
+      "location": [100.0, 200.0, 360.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "scale": [1.0, 1.0, 1.0],
+      "color": [1.0, 0.82, 0.55, 1.0],
+      "intensity": 5000.0,
+      "attenuation_radius": 1000.0,
+      "source_radius": 24.0,
+      "tags": ["mcp.scene:lighting_smoke"]
+    },
+    {
+      "name": "MCP_WindowGlow_001",
+      "kind": "rect",
+      "location": [140.0, 200.0, 500.0],
+      "source_width": 240.0,
+      "source_height": 160.0
+    }
+  ]
+}
+```
+
+## `lighting.set_time_of_day`
+
+Configures one active sun directional light and disables other directional
+lights.
+
+```json
+{
+  "sun_rotation": [-10.0, 110.0, 0.0],
+  "sun_intensity": 1.0,
+  "sun_color": [1.0, 0.93, 0.82, 1.0]
+}
+```
+
 ## MCP Methods
 
 The stdio server currently handles:
