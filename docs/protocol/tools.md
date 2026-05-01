@@ -354,6 +354,132 @@ lights.
 }
 ```
 
+## `blueprint.create_actor`
+
+Creates an actor Blueprint asset. `parent_class` defaults to `Actor`.
+
+```json
+{
+  "path": "/Game/MCP/Blueprints/BP_LED_Tower",
+  "parent_class": "Actor"
+}
+```
+
+## `blueprint.add_static_mesh_component`
+
+Adds or updates a static mesh component template on an actor Blueprint.
+
+```json
+{
+  "blueprint": "/Game/MCP/Blueprints/BP_LED_Tower",
+  "name": "BuildingMesh",
+  "mesh": "/Engine/BasicShapes/Cube.Cube",
+  "material": "/Game/MCP/Materials/MI_LED",
+  "location": [0.0, 0.0, 200.0],
+  "rotation": [0.0, 0.0, 0.0],
+  "scale": [4.0, 4.0, 8.0]
+}
+```
+
+## `blueprint.add_light_component`
+
+Adds or updates a point, rect, or spot light component template on an actor
+Blueprint.
+
+```json
+{
+  "blueprint": "/Game/MCP/Blueprints/BP_LED_Tower",
+  "name": "WindowGlow",
+  "kind": "rect",
+  "location": [0.0, -210.0, 500.0],
+  "rotation": [0.0, 180.0, 0.0],
+  "color": [0.0, 0.85, 1.0, 1.0],
+  "intensity": 8000.0,
+  "attenuation_radius": 1200.0,
+  "source_width": 320.0,
+  "source_height": 160.0
+}
+```
+
+## `blueprint.compile`
+
+Compiles a Blueprint asset.
+
+```json
+{
+  "path": "/Game/MCP/Blueprints/BP_LED_Tower",
+  "save": false
+}
+```
+
+## `runtime.create_led_animation`
+
+Creates a reusable runtime animation preset asset for pulsing a vector material
+parameter, usually `EmissiveColor`.
+
+```json
+{
+  "path": "/Game/MCP/Runtime/DA_LED_Pulse",
+  "target_component": "BuildingMesh",
+  "parameter_name": "EmissiveColor",
+  "color_a": [0.0, 0.0, 0.0, 1.0],
+  "color_b": [0.0, 0.85, 1.0, 1.0],
+  "from_scalar": 0.0,
+  "to_scalar": 10.0,
+  "speed": 2.0
+}
+```
+
+## `runtime.create_moving_light_animation`
+
+Creates a reusable runtime animation preset for moving a light component and
+pulsing its intensity/color.
+
+```json
+{
+  "path": "/Game/MCP/Runtime/DA_WindowGlow_Move",
+  "target_component": "WindowGlow",
+  "axis": [0.0, 0.0, 1.0],
+  "amplitude": 75.0,
+  "speed": 1.5,
+  "base_intensity": 8000.0
+}
+```
+
+## `runtime.create_material_parameter_animation`
+
+Creates a reusable runtime animation preset for pulsing a scalar material
+parameter.
+
+```json
+{
+  "path": "/Game/MCP/Runtime/DA_GlowAmount_Pulse",
+  "target_component": "BuildingMesh",
+  "parameter_name": "GlowAmount",
+  "from_scalar": 0.0,
+  "to_scalar": 5.0,
+  "speed": 3.0
+}
+```
+
+## `runtime.attach_animation_to_actor`
+
+Attaches animation preset assets to placed actors selected by names/tags and/or
+to an actor Blueprint. The bridge adds an `MCP_RuntimeAnimator` component that
+ticks during Play-in-Editor.
+
+```json
+{
+  "names": ["MCP_LED_Tower_001"],
+  "tags": ["mcp.group:buildings"],
+  "blueprint": "/Game/MCP/Blueprints/BP_LED_Tower",
+  "animations": [
+    "/Game/MCP/Runtime/DA_LED_Pulse",
+    "/Game/MCP/Runtime/DA_WindowGlow_Move"
+  ]
+}
+```
+
 ## MCP Methods
 
 The stdio server currently handles:
