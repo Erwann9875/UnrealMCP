@@ -4,14 +4,12 @@ High-performance MCP tooling for controlling Unreal Editor 5.5+ from Codex.
 
 Version 1 is editor-only. The system is split into:
 
-- A Rust MCP server foundation with a stdio lifetime skeleton.
+- A Rust MCP server with minimal stdio JSON-RPC dispatch for connection tools.
 - An Unreal Editor C++ plugin that executes editor commands.
 - A localhost bridge protocol optimized for bulk operations and compact responses.
 
-The current foundation includes Rust connection tool handlers and bridge
-protocol coverage. MCP JSON-RPC stdio dispatch wiring, including stdio tool
-registration for `connection.status` and `connection.capabilities`, is deferred
-to a follow-up plan.
+The current foundation includes MCP stdio dispatch for `initialize`,
+`tools/list`, and `tools/call` for the initial `connection.*` tools.
 
 ## First Smoke Test
 

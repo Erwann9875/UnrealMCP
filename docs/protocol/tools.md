@@ -1,9 +1,11 @@
 # MCP Tools
 
-This foundation defines the initial `connection` protocol/tool surface.
-Only `connection.ping` has a Rust tool handler in this foundation. The
-stdio MCP dispatch path is still a lifetime skeleton; MCP JSON-RPC dispatch
-and stdio tool registration are deferred to a follow-up plan.
+This foundation exposes the initial `connection` tool surface over minimal MCP
+stdio JSON-RPC dispatch. It supports `initialize`, `tools/list`, and
+`tools/call` for the tools below.
+
+The Rust server connects to the Unreal bridge at `UNREAL_MCP_BRIDGE_ADDR`, or
+`127.0.0.1:55557` when the environment variable is not set.
 
 ## `connection.ping`
 
@@ -21,38 +23,44 @@ Default response shape:
 
 ## `connection.status`
 
-Protocol command and Unreal bridge skeleton entry. It is not wired as an MCP
-stdio tool in this foundation. Planned MCP dispatch wiring will return compact
-connection and Unreal version details.
+Returns compact connection and Unreal version details.
 
-Bridge result shape:
+Default response data shape:
 
 ```json
 {
-  "type": "status",
-  "data": {
-    "connected": true,
-    "bridge_version": "0.1.0",
-    "unreal_version": "5.5.0"
-  }
+  "connected": true,
+  "bridge_version": "0.1.0",
+  "unreal_version": "5.5.0",
+  "elapsed_ms": 1
 }
 ```
 
 ## `connection.capabilities`
 
-Protocol command and Unreal bridge skeleton entry. It is not wired as an MCP
-stdio tool in this foundation. Planned MCP dispatch wiring will return
-supported command names. The current bridge/protocol shape is:
+Returns supported command names.
+
+Default response data shape:
 
 ```json
 {
-  "type": "capabilities",
-  "data": {
-    "commands": [
-      "connection.ping",
-      "connection.status",
-      "connection.capabilities"
-    ]
-  }
+  "commands": [
+    "connection.ping",
+    "connection.status",
+    "connection.capabilities"
+  ],
+  "elapsed_ms": 1
 }
 ```
+
+## MCP Methods
+
+The stdio server currently handles:
+
+- `initialize`
+- `notifications/initialized`
+- `tools/list`
+- `tools/call`
+
+Other MCP features, including resources, prompts, roots, sampling, logging, and
+cancellation, are out of scope for this slice.
